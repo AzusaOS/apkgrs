@@ -1,0 +1,107 @@
+name: Release binaries
+
+# Attaches the `apkg` daemon binaries to a GitHub Release. release-plz
+# creates the release and dispatches this workflow (see release-plz.yml);
+# it can also be run by hand to retry an upload without re-tagging.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to upload to (e.g. v0.0.1)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  TAG: ${{ inputs.tag }}
+
+jobs:
+  # The primary artifact: a fully static, libc-free x86_64 binary built with
+  # the fullrust toolchain. Runs on any Linux kernel with nothing else
+  # installed, which is what AzusaOS boots with.
+  fullrust:
+    name: build linux-x86_64-static (fullrust)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+
+      - name: Verify the checkout is the release tag
+        run: |
+          got="$(git describe --tags --exact-match --match "$TAG")"
+          if [[ "$got" != "$TAG" ]]; then
+            echo "::error::checked out '$got', expected release tag '$TAG'"
+            exit 1
+          fi
+
+      - name: Build static libc-free binary (fullrust)
+        uses: KarpelesLab/fullrust@master
+        with:
+          image: ghcr.io/karpeleslab/fullrust:latest
+          args: --release --features bin
+
+      - name: Pack and upload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir staging
+          cp target/x86_64-unknown-linux-fullrust/release/apkg staging/
+          cp README.md LICENSE staging/
+          asset="apkg-${TAG}-linux-x86_64-static.tar.gz"
+          tar -C staging -czf "${asset}" .
+          bzip2 -9 -c staging/apkg > "apkg_linux_amd64.bz2"
+          gh release upload "${TAG}" "${asset}" "apkg_linux_amd64.bz2" --clobber
+
+  # glibc builds, for distributions and for arm64.
+  gnu:
+    name: build ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            asset_suffix: linux-x86_64
+          - target: aarch64-unknown-linux-gnu
+            asset_suffix: linux-aarch64
+            apt_packages: gcc-aarch64-linux-gnu
+            linker: aarch64-linux-gnu-gcc
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+
+      - name: Install cross compiler
+        if: matrix.apt_packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.apt_packages }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker }}
+        run: cargo build --release --features bin --target ${{ matrix.target }}
+
+      - name: Pack and upload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir staging
+          cp target/${{ matrix.target }}/release/apkg staging/
+          cp README.md LICENSE staging/
+          asset="apkg-${TAG}-${{ matrix.asset_suffix }}.tar.gz"
+          tar -C staging -czf "${asset}" .
+          gh release upload "${TAG}" "${asset}" --clobber

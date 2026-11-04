@@ -138,7 +138,7 @@ impl Out {
         self
     }
     pub fn pad8(&mut self) -> &mut Self {
-        while self.0.len() % 8 != 0 {
+        while !self.0.len().is_multiple_of(8) {
             self.0.push(0);
         }
         self

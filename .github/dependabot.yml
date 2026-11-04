@@ -1,0 +1,17 @@
+# Keep the GitHub Actions used by the workflows current. Cargo dependencies
+# are first-party crates bumped by hand.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      actions:
+        patterns:
+          - "*"
+    ignore:
+      # `dtolnay/rust-toolchain@<version>` selects the toolchain by tag; the
+      # MSRV pin follows `rust-version` in Cargo.toml and is bumped by hand.
+      - dependency-name: "dtolnay/rust-toolchain"

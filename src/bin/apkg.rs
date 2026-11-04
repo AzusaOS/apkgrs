@@ -260,9 +260,10 @@ fn main() {
 
     log!("apkg: shutting down...");
     if let Some(ov) = &mounted.overlay
-        && let Err(e) = sys::umount(&ov.to_string_lossy(), sys::MNT_DETACH) {
-            log!("apkg: failed to unmount overlay: {e}");
-        }
+        && let Err(e) = sys::umount(&ov.to_string_lossy(), sys::MNT_DETACH)
+    {
+        log!("apkg: failed to unmount overlay: {e}");
+    }
     if let Err(e) = mounted.server.unmount() {
         log!("apkg: failed to unmount: {e}");
     }

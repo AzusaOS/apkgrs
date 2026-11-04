@@ -204,10 +204,9 @@ impl Mount {
                         .arg("--")
                         .arg(&self.mountpoint)
                         .status()
+                        && s.success()
                     {
-                        if s.success() {
-                            return Ok(());
-                        }
+                        return Ok(());
                     }
                 }
                 Err(io::Error::other("fusermount -u failed"))

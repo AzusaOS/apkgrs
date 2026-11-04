@@ -335,10 +335,10 @@ impl Db {
             ldcache::build(&entries)
         };
         *sub.ldso.write().unwrap() = Arc::new(data.clone());
-        if sub.archos == self.shared.cfg.archos {
-            if let Some(n) = self.shared.notify.read().unwrap().as_ref() {
-                n(LDSO_INO, 0, &data);
-            }
+        if sub.archos == self.shared.cfg.archos
+            && let Some(n) = self.shared.notify.read().unwrap().as_ref()
+        {
+            n(LDSO_INO, 0, &data);
         }
     }
 

@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test & lint (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux gets the FUSE server and the daemon.
+          - os: ubuntu-latest
+            features: --features bin
+          # Elsewhere only the library is meaningful.
+          - os: macos-latest
+            features: ""
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: rustfmt
+        run: cargo fmt --all --check
+      - name: clippy
+        run: cargo clippy --all-targets ${{ matrix.features }} -- -D warnings
+      - name: test
+        run: cargo test ${{ matrix.features }}
+
+  msrv:
+    name: MSRV (Rust 1.95)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.95
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv
+      - run: cargo check --all-targets --features bin
+
+  aarch64:
+    name: Cross-check aarch64 (raw syscall arm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: aarch64
+      - run: cargo clippy --target aarch64-unknown-linux-gnu --features bin -- -D warnings
+
+  fullrust:
+    name: Static libc-free build (fullrust)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build with the fullrust toolchain
+        uses: KarpelesLab/fullrust@master
+        with:
+          image: ghcr.io/karpeleslab/fullrust:latest
+          args: --release --features bin
+      - name: Check the binary is static
+        run: |
+          f=target/x86_64-unknown-linux-fullrust/release/apkg
+          file "$f"
+          if readelf -d "$f" 2>/dev/null | grep -q NEEDED; then
+            echo "::error::binary has dynamic dependencies"; exit 1
+          fi
+          "$f" -version
+
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --no-deps --features bin
+        env:
+          RUSTDOCFLAGS: -D warnings

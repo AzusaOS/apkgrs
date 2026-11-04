@@ -143,10 +143,11 @@ impl RemoteFile {
         // Keep the local copy a complete, valid .apkg: header, metadata,
         // signature and hash table are written up front.
         file.write_at(raw_header, 0)?;
-        if let Some(meta) = meta {
-            if meta.len() == header.meta_len as usize && sig::sha256(meta) == header.meta_hash {
-                file.write_at(meta, u64::from(header.meta_offset))?;
-            }
+        if let Some(meta) = meta
+            && meta.len() == header.meta_len as usize
+            && sig::sha256(meta) == header.meta_hash
+        {
+            file.write_at(meta, u64::from(header.meta_offset))?;
         }
         if (header.sig_offset as usize) >= HEADER_LEN
             && u64::from(header.sig_offset) + signature.len() as u64 <= data_off
@@ -167,10 +168,7 @@ impl RemoteFile {
             }
             file.write_at(&table, u64::from(header.table_offset))?;
         }
-        let hashes = table
-            .chunks_exact(32)
-            .map(|c| c.try_into().unwrap())
-            .collect();
+        let hashes = table.as_chunks::<32>().0.to_vec();
 
         Ok(RemoteFile {
             url: url.to_string(),
