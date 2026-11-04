@@ -1,0 +1,47 @@
+[package]
+name = "apkg"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.95"
+description = "AzusaOS package manager: access signed Azusa packages as a library, or mount them with the FUSE daemon."
+repository = "https://github.com/AzusaOS/apkgrs"
+license = "MIT"
+readme = "README.md"
+keywords = ["azusa", "package", "squashfs", "fuse"]
+categories = ["filesystem", "command-line-utilities"]
+exclude = [".github"]
+
+[lib]
+name = "apkg"
+
+[[bin]]
+name = "apkg"
+path = "src/bin/apkg.rs"
+# The daemon is only built when asked for: library consumers get package
+# access without the FUSE server or the daemon's control plane.
+required-features = ["bin"]
+
+[features]
+default = []
+# Pure-Rust FUSE server speaking the kernel protocol on /dev/fuse directly
+# (raw syscalls, no libc / libfuse). Linux only.
+fuse = []
+# The `apkg` daemon binary (mounts /pkg/<db>, control socket, signals).
+bin = ["fuse"]
+
+[dependencies]
+# All three are first-party pure-Rust crates: no C toolchain, and they build
+# on the libc-free `x86_64-unknown-linux-fullrust` target.
+fstool = { version = "0.5.2", default-features = false, features = ["squashfs", "gzip"] }
+purecrypto = { version = "0.10.4", default-features = false, features = ["std", "hash", "ec"] }
+rsurl = { version = "0.1.21", default-features = false, features = ["purecrypto-tls"] }
+
+[lints.rust]
+# `fullrust` is the out-of-tree libc-free Linux target our release binaries
+# are built for; register it so `cfg(target_os = "fullrust")` doesn't warn.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("fullrust"))'] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
