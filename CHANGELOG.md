@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.1](https://github.com/AzusaOS/apkgrs/compare/v0.0.0...v0.0.1) - 2026-11-04
+
+### Other
+
+- Add apkg-convert and apkg-index repository tools
+- skip the page-cache store notification for empty data
+- Port upstream apkg changes: release channels, graceful restart, self-update
+- crates.io, docs.rs and license badges
+- adaptive read-ahead in bytes, doubling on sequential misses
+
 ### Added
 
 - Release channels with server-distributed version pins (`-channel`,
