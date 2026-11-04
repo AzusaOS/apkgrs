@@ -109,7 +109,10 @@ struct PkgDevice {
 
 impl Read for PkgDevice {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let n = self.remote.read_at(self.pos, buf).map_err(io::Error::other)?;
+        let n = self
+            .remote
+            .read_at(self.pos, buf)
+            .map_err(io::Error::other)?;
         self.pos += n as u64;
         Ok(n)
     }
@@ -117,7 +120,10 @@ impl Read for PkgDevice {
 
 impl Write for PkgDevice {
     fn write(&mut self, _: &[u8]) -> io::Result<usize> {
-        Err(io::Error::new(io::ErrorKind::PermissionDenied, "read-only package"))
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "read-only package",
+        ))
     }
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
@@ -151,9 +157,16 @@ impl BlockDevice for PkgDevice {
         Ok(())
     }
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> fstool::Result<()> {
-        let n = self.remote.read_at(offset, buf).map_err(|e| fstool::Error::Io(io::Error::other(e)))?;
+        let n = self
+            .remote
+            .read_at(offset, buf)
+            .map_err(|e| fstool::Error::Io(io::Error::other(e)))?;
         if n != buf.len() {
-            return Err(fstool::Error::OutOfBounds { offset, len: buf.len() as u64, size: self.remote.data_len() });
+            return Err(fstool::Error::OutOfBounds {
+                offset,
+                len: buf.len() as u64,
+                size: self.remote.data_len(),
+            });
         }
         Ok(())
     }
@@ -199,7 +212,10 @@ pub struct Package {
 
 impl std::fmt::Debug for Package {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Package").field("name", &self.name).field("path", &self.rel_path).finish()
+        f.debug_struct("Package")
+            .field("name", &self.name)
+            .field("path", &self.rel_path)
+            .finish()
     }
 }
 
@@ -326,11 +342,24 @@ impl Package {
             &self.hash,
             self.size,
         )?);
-        let mut dev = PkgDevice { remote: remote.clone(), pos: 0 };
+        let mut dev = PkgDevice {
+            remote: remote.clone(),
+            pos: 0,
+        };
         let sq = Squashfs::open(&mut dev)?;
         let root = sq.inode_meta(&mut dev, "/")?;
-        let opened = Opened { remote, sq: Mutex::new(sq), root_n: root.inode_number, nodes: Mutex::new(Nodes::default()) };
-        opened.nodes.lock().unwrap().paths.insert(1, "/".to_string());
+        let opened = Opened {
+            remote,
+            sq: Mutex::new(sq),
+            root_n: root.inode_number,
+            nodes: Mutex::new(Nodes::default()),
+        };
+        opened
+            .nodes
+            .lock()
+            .unwrap()
+            .paths
+            .insert(1, "/".to_string());
         Ok(opened)
     }
 
@@ -342,7 +371,10 @@ impl Package {
     // ---- path API -------------------------------------------------------
 
     fn norm(path: &str) -> String {
-        let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty() && *s != ".").collect();
+        let parts: Vec<&str> = path
+            .split('/')
+            .filter(|s| !s.is_empty() && *s != ".")
+            .collect();
         format!("/{}", parts.join("/"))
     }
 
@@ -364,7 +396,10 @@ impl Package {
     pub fn read_link(&self, path: &str) -> Result<String> {
         let o = self.opened()?;
         let mut dev = o.dev();
-        o.sq.lock().unwrap().read_symlink(&mut dev, &Self::norm(path)).map_err(not_found_or)
+        o.sq.lock()
+            .unwrap()
+            .read_symlink(&mut dev, &Self::norm(path))
+            .map_err(not_found_or)
     }
 
     /// Read from the regular file at `path`.
@@ -407,7 +442,10 @@ impl Package {
         let o = self.opened()?;
         let p = o.path_of(ino)?;
         let mut dev = o.dev();
-        o.sq.lock().unwrap().read_symlink(&mut dev, &p).map_err(not_found_or)
+        o.sq.lock()
+            .unwrap()
+            .read_symlink(&mut dev, &p)
+            .map_err(not_found_or)
     }
 
     /// Read file node `ino`.
@@ -420,7 +458,10 @@ impl Package {
 
 impl Opened {
     fn dev(&self) -> PkgDevice {
-        PkgDevice { remote: self.remote.clone(), pos: 0 }
+        PkgDevice {
+            remote: self.remote.clone(),
+            pos: 0,
+        }
     }
 
     fn to_local(&self, n: u32) -> u32 {
@@ -434,12 +475,23 @@ impl Opened {
     }
 
     fn path_of(&self, ino: u32) -> Result<String> {
-        self.nodes.lock().unwrap().paths.get(&ino).cloned().ok_or(Error::NotFound)
+        self.nodes
+            .lock()
+            .unwrap()
+            .paths
+            .get(&ino)
+            .cloned()
+            .ok_or(Error::NotFound)
     }
 
     fn attr_of_path(&self, path: &str) -> Result<Attr> {
         let mut dev = self.dev();
-        let m = self.sq.lock().unwrap().inode_meta(&mut dev, path).map_err(not_found_or)?;
+        let m = self
+            .sq
+            .lock()
+            .unwrap()
+            .inode_meta(&mut dev, path)
+            .map_err(not_found_or)?;
         let ino = self.to_local(m.inode_number);
         let a = Attr {
             ino,
@@ -470,15 +522,30 @@ impl Opened {
         }
         let p = self.path_of(ino)?;
         let mut dev = self.dev();
-        let raw = self.sq.lock().unwrap().list_path(&mut dev, &p).map_err(not_found_or)?;
+        let raw = self
+            .sq
+            .lock()
+            .unwrap()
+            .list_path(&mut dev, &p)
+            .map_err(not_found_or)?;
         let list: Vec<DirEntry> = raw
             .into_iter()
-            .map(|e| DirEntry { ino: self.to_local(e.inode), kind: FileKind::from_entry(e.kind), name: e.name })
+            .map(|e| DirEntry {
+                ino: self.to_local(e.inode),
+                kind: FileKind::from_entry(e.kind),
+                name: e.name,
+            })
             .collect();
         let list = Arc::new(list);
         let mut nodes = self.nodes.lock().unwrap();
         for e in list.iter() {
-            nodes.paths.entry(e.ino).or_insert_with(|| if p == "/" { format!("/{}", e.name) } else { format!("{p}/{}", e.name) });
+            nodes.paths.entry(e.ino).or_insert_with(|| {
+                if p == "/" {
+                    format!("/{}", e.name)
+                } else {
+                    format!("{p}/{}", e.name)
+                }
+            });
         }
         nodes.dirs.insert(ino, list.clone());
         Ok(list)
@@ -486,14 +553,19 @@ impl Opened {
 
     fn node_lookup(&self, parent: u32, name: &str) -> Result<Attr> {
         let list = self.node_readdir(parent)?;
-        let e = list.iter().find(|e| e.name == name).ok_or(Error::NotFound)?;
+        let e = list
+            .iter()
+            .find(|e| e.name == name)
+            .ok_or(Error::NotFound)?;
         self.node_attr(e.ino)
     }
 
     fn read_path(&self, path: &str, offset: u64, buf: &mut [u8]) -> Result<usize> {
         let mut dev = self.dev();
         let sq = self.sq.lock().unwrap();
-        let mut h = sq.open_file_read_handle(&mut dev, path).map_err(not_found_or)?;
+        let mut h = sq
+            .open_file_read_handle(&mut dev, path)
+            .map_err(not_found_or)?;
         h.seek(SeekFrom::Start(offset))?;
         let mut done = 0;
         while done < buf.len() {

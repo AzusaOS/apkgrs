@@ -113,15 +113,22 @@ impl ArchOs {
     /// Parse `os.arch`, e.g. `linux.amd64`.
     pub fn parse(s: &str) -> Option<ArchOs> {
         let (o, a) = s.split_once('.')?;
-        Some(ArchOs { os: Os::parse(o)?, arch: Arch::parse(a)? })
+        Some(ArchOs {
+            os: Os::parse(o)?,
+            arch: Arch::parse(a)?,
+        })
     }
 
     /// Host platform, overridable through `APKG_OS`/`APKG_ARCH` (or the Go
     /// era `GOOS`/`GOARCH`) environment variables.
     pub fn host() -> ArchOs {
         let env = |a: &str, b: &str| std::env::var(a).or_else(|_| std::env::var(b)).ok();
-        let os = env("APKG_OS", "GOOS").and_then(|v| Os::parse(&v)).unwrap_or_else(Os::current);
-        let arch = env("APKG_ARCH", "GOARCH").and_then(|v| Arch::parse(&v)).unwrap_or_else(Arch::current);
+        let os = env("APKG_OS", "GOOS")
+            .and_then(|v| Os::parse(&v))
+            .unwrap_or_else(Os::current);
+        let arch = env("APKG_ARCH", "GOARCH")
+            .and_then(|v| Arch::parse(&v))
+            .unwrap_or_else(Arch::current);
         ArchOs { os, arch }
     }
 
@@ -160,9 +167,13 @@ mod tests {
 
     #[test]
     fn parse_and_suffix() {
-        assert_eq!(ArchOs::parse("linux.amd64"), Some(ArchOs::new(Os::Linux, Arch::Amd64)));
+        assert_eq!(
+            ArchOs::parse("linux.amd64"),
+            Some(ArchOs::new(Os::Linux, Arch::Amd64))
+        );
         assert_eq!(ArchOs::parse("linux"), None);
-        let (bare, ao) = ArchOs::split_suffix("azusa.symlinks.core.0.0.3.20210216.linux.amd64").unwrap();
+        let (bare, ao) =
+            ArchOs::split_suffix("azusa.symlinks.core.0.0.3.20210216.linux.amd64").unwrap();
         assert_eq!(bare, "azusa.symlinks.core.0.0.3.20210216");
         assert_eq!(ao.to_string(), "linux.amd64");
         assert!(ArchOs::split_suffix("sys-libs.zlib").is_none());

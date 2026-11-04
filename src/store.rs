@@ -64,13 +64,22 @@ fn rd_ldso(c: &mut Cursor<'_>) -> Result<ldcache::Entry> {
     let hwcap = c.u64_be()?;
     let key = String::from_utf8_lossy(c.varblob(4096)?).into_owned();
     let value = String::from_utf8_lossy(c.varblob(4096)?).into_owned();
-    Ok(ldcache::Entry { flags, key, value, os_version, hwcap })
+    Ok(ldcache::Entry {
+        flags,
+        key,
+        value,
+        os_version,
+        hwcap,
+    })
 }
 
 impl Store {
     /// Empty store that will be saved to `file`.
     pub fn empty(file: PathBuf) -> Store {
-        Store { file, ..Default::default() }
+        Store {
+            file,
+            ..Default::default()
+        }
     }
 
     /// Load `file`, or return an empty store if it does not exist or is
@@ -101,7 +110,11 @@ impl Store {
             return Err(Error::Format("unsupported index format".into()));
         }
         let version = String::from_utf8_lossy(c.varblob(64)?).into_owned();
-        let mut st = Store { file: file.to_path_buf(), version, ..Default::default() };
+        let mut st = Store {
+            file: file.to_path_buf(),
+            version,
+            ..Default::default()
+        };
         let count = c.u32_be()?;
         for _ in 0..count {
             let r = PackageRecord::read(&mut c)?;
@@ -146,7 +159,9 @@ impl Store {
 
     /// Exact lookup by full name.
     pub fn get(&self, name: &str) -> Option<&StoredPackage> {
-        self.by_name.get(&collated_version(name)).map(|&i| &self.packages[i])
+        self.by_name
+            .get(&collated_version(name))
+            .map(|&i| &self.packages[i])
     }
 
     /// Lookup by header hash.
@@ -167,7 +182,9 @@ impl Store {
 
     /// All package names in collation order.
     pub fn names(&self) -> impl Iterator<Item = &str> {
-        self.by_name.values().map(|&i| self.packages[i].name.as_str())
+        self.by_name
+            .values()
+            .map(|&i| self.packages[i].name.as_str())
     }
 
     /// Read a package's raw JSON metadata from disk.
@@ -212,8 +229,11 @@ impl Store {
         }
         drop(f);
 
-        let mut name_pos: HashMap<Vec<u8>, usize> =
-            all.iter().enumerate().map(|(i, r)| (collated_version(&r.name), i)).collect();
+        let mut name_pos: HashMap<Vec<u8>, usize> = all
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (collated_version(&r.name), i))
+            .collect();
         let mut ldso = self.ldso.clone();
         let mut known: std::collections::HashSet<[u8; 32]> = self.by_hash.keys().copied().collect();
         let mut added = 0;
@@ -224,13 +244,18 @@ impl Store {
             added += 1;
             if let Ok(meta) = Value::parse(&r.meta) {
                 if let Some(raw) = meta.get("ld.so.cache").and_then(Value::as_str) {
-                    match crate::base64::decode(raw.as_bytes()).ok_or_else(|| Error::Format("bad base64".into())).and_then(|b| ldcache::parse(&b)) {
+                    match crate::base64::decode(raw.as_bytes())
+                        .ok_or_else(|| Error::Format("bad base64".into()))
+                        .and_then(|b| ldcache::parse(&b))
+                    {
                         Ok(entries) => {
                             for e in entries {
                                 ldso.insert(e.value.clone(), e);
                             }
                         }
-                        Err(e) => crate::log!("apkgdb: {}: failed to parse ld.so.cache: {e}", r.name),
+                        Err(e) => {
+                            crate::log!("apkgdb: {}: failed to parse ld.so.cache: {e}", r.name)
+                        }
                     }
                 }
             } else {
@@ -314,19 +339,35 @@ mod tests {
         let mut s = Store::load(file.clone());
         assert!(s.is_empty());
         let n = s
-            .merge_and_save("20200101000000", vec![rec("a.b.core.1.9.linux.amd64", 1), rec("a.b.core.1.10.linux.amd64", 2)])
+            .merge_and_save(
+                "20200101000000",
+                vec![
+                    rec("a.b.core.1.9.linux.amd64", 1),
+                    rec("a.b.core.1.10.linux.amd64", 2),
+                ],
+            )
             .unwrap();
         assert_eq!(n, 2);
         // duplicate hash skipped
-        assert_eq!(s.merge_and_save("20200102000000", vec![rec("a.b.core.1.9.linux.amd64", 1)]).unwrap(), 0);
+        assert_eq!(
+            s.merge_and_save("20200102000000", vec![rec("a.b.core.1.9.linux.amd64", 1)])
+                .unwrap(),
+            0
+        );
         let s = Store::load(file);
         assert_eq!(s.version, "20200102000000");
         assert_eq!(s.len(), 2);
         let p = s.latest_with_prefix("a.b.core").unwrap();
         assert_eq!(p.name, "a.b.core.1.10.linux.amd64");
-        assert_eq!(s.latest_with_prefix("a.b.core.1").unwrap().name, "a.b.core.1.10.linux.amd64");
+        assert_eq!(
+            s.latest_with_prefix("a.b.core.1").unwrap().name,
+            "a.b.core.1.10.linux.amd64"
+        );
         assert!(s.latest_with_prefix("a.b.cor").is_none());
-        assert_eq!(s.read_meta(p).unwrap(), b"{\"full_name\":\"a.b.core.1.10.linux.amd64\"}");
+        assert_eq!(
+            s.read_meta(p).unwrap(),
+            b"{\"full_name\":\"a.b.core.1.10.linux.amd64\"}"
+        );
         assert!(s.get("a.b.core.1.9.linux.amd64").is_some());
         let _ = fs::remove_dir_all(&dir);
     }

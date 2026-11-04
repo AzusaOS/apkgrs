@@ -95,11 +95,13 @@ impl Error {
         const ENOSYS: i32 = 38;
         match self {
             Error::NotFound => ENOENT,
-            Error::Io(e) => e.raw_os_error().unwrap_or(if e.kind() == io::ErrorKind::NotFound {
-                ENOENT
-            } else {
-                EIO
-            }),
+            Error::Io(e) => e
+                .raw_os_error()
+                .unwrap_or(if e.kind() == io::ErrorKind::NotFound {
+                    ENOENT
+                } else {
+                    EIO
+                }),
             Error::Invalid(_) => EINVAL,
             Error::Unsupported(_) => ENOSYS,
             _ => EIO,

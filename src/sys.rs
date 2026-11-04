@@ -8,7 +8,10 @@
 use std::ffi::CString;
 use std::io;
 
-#[cfg(all(any(target_os = "linux", target_os = "fullrust"), target_arch = "x86_64"))]
+#[cfg(all(
+    any(target_os = "linux", target_os = "fullrust"),
+    target_arch = "x86_64"
+))]
 mod arch {
     pub const MOUNT: usize = 165;
     pub const UMOUNT2: usize = 166;
@@ -38,7 +41,10 @@ mod arch {
     }
 }
 
-#[cfg(all(any(target_os = "linux", target_os = "fullrust"), target_arch = "aarch64"))]
+#[cfg(all(
+    any(target_os = "linux", target_os = "fullrust"),
+    target_arch = "aarch64"
+))]
 mod arch {
     pub const MOUNT: usize = 40;
     pub const UMOUNT2: usize = 39;
@@ -67,7 +73,10 @@ mod arch {
     }
 }
 
-#[cfg(not(all(any(target_os = "linux", target_os = "fullrust"), any(target_arch = "x86_64", target_arch = "aarch64"))))]
+#[cfg(not(all(
+    any(target_os = "linux", target_os = "fullrust"),
+    any(target_arch = "x86_64", target_arch = "aarch64")
+)))]
 mod arch {
     pub const MOUNT: usize = 0;
     pub const UMOUNT2: usize = 0;
@@ -86,7 +95,11 @@ mod arch {
 }
 
 fn check(r: isize) -> io::Result<usize> {
-    if (-4095..0).contains(&r) { Err(io::Error::from_raw_os_error(-r as i32)) } else { Ok(r as usize) }
+    if (-4095..0).contains(&r) {
+        Err(io::Error::from_raw_os_error(-r as i32))
+    } else {
+        Ok(r as usize)
+    }
 }
 
 /// Raw syscall with up to six arguments; negative returns become errors.
@@ -111,7 +124,17 @@ pub const MNT_DETACH: usize = 2;
 pub fn mount(source: &str, target: &str, fstype: &str, flags: usize, data: &str) -> io::Result<()> {
     let (s, t, f, d) = (cstr(source)?, cstr(target)?, cstr(fstype)?, cstr(data)?);
     unsafe {
-        syscall(arch::MOUNT, [s.as_ptr() as usize, t.as_ptr() as usize, f.as_ptr() as usize, flags, d.as_ptr() as usize, 0])
+        syscall(
+            arch::MOUNT,
+            [
+                s.as_ptr() as usize,
+                t.as_ptr() as usize,
+                f.as_ptr() as usize,
+                flags,
+                d.as_ptr() as usize,
+                0,
+            ],
+        )
     }?;
     Ok(())
 }
@@ -135,12 +158,39 @@ pub fn getgid() -> u32 {
     unsafe { syscall(arch::GETGID, [0; 6]) }.unwrap_or(u32::MAX as usize) as u32
 }
 
-/// Set RLIMIT_NOFILE soft and hard limits.
-pub fn set_nofile_limit(n: u64) -> io::Result<()> {
+/// Raise RLIMIT_NOFILE to `n` (soft and hard). Without the privilege to
+/// raise the hard limit, the soft limit is raised as far as the hard limit
+/// allows. Returns the resulting soft limit.
+pub fn set_nofile_limit(n: u64) -> io::Result<u64> {
     const RLIMIT_NOFILE: usize = 7;
-    let lim = [n, n];
-    unsafe { syscall(arch::PRLIMIT64, [0, RLIMIT_NOFILE, lim.as_ptr() as usize, 0, 0, 0]) }?;
-    Ok(())
+    let want = [n, n];
+    match unsafe {
+        syscall(
+            arch::PRLIMIT64,
+            [0, RLIMIT_NOFILE, want.as_ptr() as usize, 0, 0, 0],
+        )
+    } {
+        Ok(_) => Ok(n),
+        Err(e) if e.raw_os_error() == Some(1) => {
+            let mut cur = [0u64; 2];
+            unsafe {
+                syscall(
+                    arch::PRLIMIT64,
+                    [0, RLIMIT_NOFILE, 0, cur.as_mut_ptr() as usize, 0, 0],
+                )
+            }?;
+            let soft = n.min(cur[1]);
+            let new = [soft, cur[1]];
+            unsafe {
+                syscall(
+                    arch::PRLIMIT64,
+                    [0, RLIMIT_NOFILE, new.as_ptr() as usize, 0, 0, 0],
+                )
+            }?;
+            Ok(soft)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Clear FD_CLOEXEC so `fd` survives exec.
@@ -165,8 +215,21 @@ pub fn signalfd(signals: &[u32]) -> io::Result<std::fs::File> {
         mask |= 1 << (s - 1);
     }
     unsafe {
-        syscall(arch::RT_SIGPROCMASK, [SIG_BLOCK, &mask as *const u64 as usize, 0, 8, 0, 0])?;
-        let fd = syscall(arch::SIGNALFD4, [usize::MAX /* -1 */, &mask as *const u64 as usize, 8, SFD_CLOEXEC, 0, 0])?;
+        syscall(
+            arch::RT_SIGPROCMASK,
+            [SIG_BLOCK, &mask as *const u64 as usize, 0, 8, 0, 0],
+        )?;
+        let fd = syscall(
+            arch::SIGNALFD4,
+            [
+                usize::MAX, /* -1 */
+                &mask as *const u64 as usize,
+                8,
+                SFD_CLOEXEC,
+                0,
+                0,
+            ],
+        )?;
         Ok(std::fs::File::from_raw_fd(fd as i32))
     }
 }
@@ -201,7 +264,10 @@ pub fn recv_fd(sock: i32) -> io::Result<i32> {
     const MSG_CMSG_CLOEXEC: usize = 0x4000_0000;
 
     let mut data = [0u8; 1];
-    let mut iov = IoVec { base: data.as_mut_ptr(), len: 1 };
+    let mut iov = IoVec {
+        base: data.as_mut_ptr(),
+        len: 1,
+    };
     // cmsghdr { size_t len; int level; int type; } + int, 8-aligned
     let mut ctl = [0u64; 4];
     let mut msg = MsgHdr {
@@ -214,19 +280,37 @@ pub fn recv_fd(sock: i32) -> io::Result<i32> {
         flags: 0,
     };
     let n = loop {
-        match unsafe { syscall(arch::RECVMSG, [sock as usize, &mut msg as *mut MsgHdr as usize, MSG_CMSG_CLOEXEC, 0, 0, 0]) } {
+        match unsafe {
+            syscall(
+                arch::RECVMSG,
+                [
+                    sock as usize,
+                    &mut msg as *mut MsgHdr as usize,
+                    MSG_CMSG_CLOEXEC,
+                    0,
+                    0,
+                    0,
+                ],
+            )
+        } {
             Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
             r => break r?,
         }
     };
     if n == 0 || msg.controllen < 16 + 4 {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "no file descriptor received"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "no file descriptor received",
+        ));
     }
     let bytes: &[u8] = unsafe { std::slice::from_raw_parts(ctl.as_ptr() as *const u8, 32) };
     let level = i32::from_ne_bytes(bytes[8..12].try_into().unwrap());
     let typ = i32::from_ne_bytes(bytes[12..16].try_into().unwrap());
     if level != SOL_SOCKET || typ != SCM_RIGHTS {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "unexpected control message"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "unexpected control message",
+        ));
     }
     Ok(i32::from_ne_bytes(bytes[16..20].try_into().unwrap()))
 }

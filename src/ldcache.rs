@@ -51,7 +51,9 @@ impl Order {
 fn cstr(data: &[u8], pos: u32) -> Result<String> {
     let pos = pos as usize;
     if pos >= data.len() {
-        return Err(Error::Format("ld.so.cache: string offset out of range".into()));
+        return Err(Error::Format(
+            "ld.so.cache: string offset out of range".into(),
+        ));
     }
     let s = &data[pos..];
     let end = s.iter().position(|&b| b == 0).unwrap_or(s.len());
@@ -71,7 +73,11 @@ pub fn parse(data: &[u8]) -> Result<Vec<Entry>> {
     }
     let nlibs = nlibs as usize;
     let table_off = HEADER_LEN
-        .checked_add(nlibs.checked_mul(ENTRY_LEN).ok_or_else(|| Error::Format("ld.so.cache: too many libs".into()))?)
+        .checked_add(
+            nlibs
+                .checked_mul(ENTRY_LEN)
+                .ok_or_else(|| Error::Format("ld.so.cache: too many libs".into()))?,
+        )
         .filter(|&o| o <= data.len())
         .ok_or_else(|| Error::Format("ld.so.cache: truncated".into()))?;
     let mut out = Vec::with_capacity(nlibs);
@@ -128,7 +134,11 @@ pub fn libcmp(p1: &str, p2: &str) -> Ordering {
             j += 1;
         }
     }
-    if j < b.len() { Ordering::Less } else { Ordering::Equal }
+    if j < b.len() {
+        Ordering::Less
+    } else {
+        Ordering::Equal
+    }
 }
 
 /// Sort entries the way ldconfig does (descending by [`libcmp`]), which the
@@ -173,9 +183,27 @@ mod tests {
     #[test]
     fn roundtrip() {
         let mut e = vec![
-            Entry { flags: 0x303, key: "libz.so.1".into(), value: "/pkg/main/libs.zlib.libs/lib64/libz.so.1".into(), os_version: 0, hwcap: 0 },
-            Entry { flags: 0x303, key: "libc.so.6".into(), value: "/pkg/main/glibc/lib64/libc.so.6".into(), os_version: 0, hwcap: 0 },
-            Entry { flags: 0x303, key: "libz.so.10".into(), value: "/x".into(), os_version: 1, hwcap: 2 },
+            Entry {
+                flags: 0x303,
+                key: "libz.so.1".into(),
+                value: "/pkg/main/libs.zlib.libs/lib64/libz.so.1".into(),
+                os_version: 0,
+                hwcap: 0,
+            },
+            Entry {
+                flags: 0x303,
+                key: "libc.so.6".into(),
+                value: "/pkg/main/glibc/lib64/libc.so.6".into(),
+                os_version: 0,
+                hwcap: 0,
+            },
+            Entry {
+                flags: 0x303,
+                key: "libz.so.10".into(),
+                value: "/x".into(),
+                os_version: 1,
+                hwcap: 2,
+            },
         ];
         sort(&mut e);
         assert_eq!(e[0].key, "libz.so.10");

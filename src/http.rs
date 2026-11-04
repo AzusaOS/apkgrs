@@ -43,13 +43,21 @@ pub fn get_range(url: &str, offset: u64, len: u64) -> Result<Vec<u8>> {
         206 => r.body,
         // server ignored the range: slice the full body
         200 => {
-            let start = usize::try_from(offset).map_err(|_| Error::Http("range too large".into()))?;
+            let start =
+                usize::try_from(offset).map_err(|_| Error::Http("range too large".into()))?;
             r.body.get(start..).map(|b| b.to_vec()).unwrap_or_default()
         }
-        s => return Err(Error::Http(format!("GET {url} (range {offset}+{len}): status {s}"))),
+        s => {
+            return Err(Error::Http(format!(
+                "GET {url} (range {offset}+{len}): status {s}"
+            )));
+        }
     };
     if (body.len() as u64) < len {
-        return Err(Error::Http(format!("GET {url}: short range response ({} < {len})", body.len())));
+        return Err(Error::Http(format!(
+            "GET {url}: short range response ({} < {len})",
+            body.len()
+        )));
     }
     let mut body = body;
     body.truncate(len as usize);

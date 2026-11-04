@@ -50,7 +50,9 @@ impl PackageRecord {
     pub fn read(c: &mut Cursor<'_>) -> Result<PackageRecord> {
         let t = c.u8()?;
         if t != 0 {
-            return Err(Error::Format(format!("invalid data in db (invalid package type {t})")));
+            return Err(Error::Format(format!(
+                "invalid data in db (invalid package type {t})"
+            )));
         }
         let hash: [u8; 32] = c.take(32)?.try_into().unwrap();
         let size = c.u64_be()?;
@@ -60,7 +62,16 @@ impl PackageRecord {
         let header = c.varblob(256)?.to_vec();
         let sig = c.varblob(SIGNATURE_SIZE as u64)?.to_vec();
         let meta = c.varblob(1024 * 1024)?.to_vec();
-        Ok(PackageRecord { hash, size, inodes, name, path, header, sig, meta })
+        Ok(PackageRecord {
+            hash,
+            size,
+            inodes,
+            name,
+            path,
+            header,
+            sig,
+            meta,
+        })
     }
 
     /// Encode this record (same encoding as in APDB files).
@@ -133,5 +144,14 @@ pub fn parse(data: &[u8]) -> Result<Database> {
     for _ in 0..count {
         packages.push(PackageRecord::read(&mut c)?);
     }
-    Ok(Database { flags, created, created_nsec, os, arch, name, signer, packages })
+    Ok(Database {
+        flags,
+        created,
+        created_nsec,
+        os,
+        arch,
+        name,
+        signer,
+        packages,
+    })
 }

@@ -149,19 +149,40 @@ impl Out {
         self.u64(a.ino).u64(a.size).u64(a.blocks);
         self.u64(a.mtime).u64(a.mtime).u64(a.mtime); // atime, mtime, ctime
         self.u32(0).u32(0).u32(0); // nsecs
-        self.u32(a.mode).u32(a.nlink).u32(a.uid).u32(a.gid).u32(a.rdev).u32(a.blksize);
+        self.u32(a.mode)
+            .u32(a.nlink)
+            .u32(a.uid)
+            .u32(a.gid)
+            .u32(a.rdev)
+            .u32(a.blksize);
         self.u32(0) // flags
     }
 
     /// `struct fuse_entry_out` (128 bytes).
-    pub fn entry(&mut self, nodeid: u64, a: &FileAttr, entry_valid: u64, attr_valid: u64) -> &mut Self {
-        self.u64(nodeid).u64(0).u64(entry_valid).u64(attr_valid).u32(0).u32(0);
+    pub fn entry(
+        &mut self,
+        nodeid: u64,
+        a: &FileAttr,
+        entry_valid: u64,
+        attr_valid: u64,
+    ) -> &mut Self {
+        self.u64(nodeid)
+            .u64(0)
+            .u64(entry_valid)
+            .u64(attr_valid)
+            .u32(0)
+            .u32(0);
         self.attr(a)
     }
 
     /// `struct fuse_dirent` + name, padded.
     pub fn dirent(&mut self, ino: u64, off: u64, typ: u32, name: &[u8]) -> &mut Self {
-        self.u64(ino).u64(off).u32(name.len() as u32).u32(typ).bytes(name).pad8()
+        self.u64(ino)
+            .u64(off)
+            .u32(name.len() as u32)
+            .u32(typ)
+            .bytes(name)
+            .pad8()
     }
 }
 

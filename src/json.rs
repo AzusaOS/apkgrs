@@ -263,11 +263,16 @@ impl Parser<'_> {
             }
         }
         // only ASCII was consumed
-        Ok(Value::Number(String::from_utf8_lossy(&self.s[start..self.i]).into_owned()))
+        Ok(Value::Number(
+            String::from_utf8_lossy(&self.s[start..self.i]).into_owned(),
+        ))
     }
 
     fn hex4(&mut self) -> Result<u32, String> {
-        let h = self.s.get(self.i..self.i + 4).ok_or("truncated \\u escape")?;
+        let h = self
+            .s
+            .get(self.i..self.i + 4)
+            .ok_or("truncated \\u escape")?;
         let s = std::str::from_utf8(h).map_err(|_| "bad \\u escape")?;
         let v = u32::from_str_radix(s, 16).map_err(|_| "bad \\u escape")?;
         self.i += 4;
@@ -323,7 +328,8 @@ impl Parser<'_> {
                 c => out.push(c),
             }
         }
-        String::from_utf8(out).map_err(|_| format!("invalid utf-8 in string before offset {}", self.i))
+        String::from_utf8(out)
+            .map_err(|_| format!("invalid utf-8 in string before offset {}", self.i))
     }
 }
 
@@ -333,12 +339,16 @@ mod tests {
 
     #[test]
     fn parse_basic() {
-        let v = Value::parse(br#" {"a":1,"b":[true,false,null],"c":"x\u00e9\n","d":{"e":-1.5e3}} "#)
-            .unwrap();
+        let v =
+            Value::parse(br#" {"a":1,"b":[true,false,null],"c":"x\u00e9\n","d":{"e":-1.5e3}} "#)
+                .unwrap();
         assert_eq!(v.get("a").unwrap().as_u64(), Some(1));
         assert_eq!(v.get("b").unwrap().as_array().unwrap().len(), 3);
         assert_eq!(v.get("c").unwrap().as_str(), Some("xé\n"));
-        assert_eq!(v.get("d").unwrap().get("e"), Some(&Value::Number("-1.5e3".into())));
+        assert_eq!(
+            v.get("d").unwrap().get("e"),
+            Some(&Value::Number("-1.5e3".into()))
+        );
         assert_eq!(Value::parse(v.to_json().as_bytes()).unwrap(), v);
     }
 
@@ -351,7 +361,16 @@ mod tests {
 
     #[test]
     fn rejects() {
-        for bad in [&b"{"[..], b"[1,]", b"01", b"\"a", b"{\"a\" 1}", b"1 2", b"tru", b"\"\x01\""] {
+        for bad in [
+            &b"{"[..],
+            b"[1,]",
+            b"01",
+            b"\"a",
+            b"{\"a\" 1}",
+            b"1 2",
+            b"tru",
+            b"\"\x01\"",
+        ] {
             assert!(Value::parse(bad).is_err(), "{:?}", std::str::from_utf8(bad));
         }
     }

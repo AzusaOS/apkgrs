@@ -52,7 +52,12 @@ impl Config {
     /// Configuration for database `name` stored under `path`, for the host
     /// platform, using the default repository.
     pub fn new(name: &str, path: impl Into<PathBuf>) -> Config {
-        Config { prefix: DEFAULT_PREFIX.to_string(), name: name.to_string(), path: path.into(), archos: ArchOs::host() }
+        Config {
+            prefix: DEFAULT_PREFIX.to_string(),
+            name: name.to_string(),
+            path: path.into(),
+            archos: ArchOs::host(),
+        }
     }
 }
 
@@ -157,7 +162,8 @@ impl Db {
 
     fn store_path(&self, ao: ArchOs) -> PathBuf {
         let c = &self.shared.cfg;
-        c.path.join(format!("{}.{}.{}.apkgdb", c.name, ao.os, ao.arch))
+        c.path
+            .join(format!("{}.{}.{}.apkgdb", c.name, ao.os, ao.arch))
     }
 
     /// Database for platform `ao`, created (and downloaded) on first use.
@@ -187,7 +193,8 @@ impl Db {
 
     /// The primary (host platform) database.
     pub fn primary(&self) -> Arc<SubDb> {
-        self.sub(self.shared.cfg.archos).expect("primary database is created at open")
+        self.sub(self.shared.cfg.archos)
+            .expect("primary database is created at open")
     }
 
     /// Platforms with an opened database.
@@ -253,19 +260,29 @@ impl Db {
 
         let mut data = None;
         if !current.is_empty() {
-            crate::log!("apkgdb: Downloading {} database delta to version {version} ...", self.name());
+            crate::log!(
+                "apkgdb: Downloading {} database delta to version {version} ...",
+                self.name()
+            );
             match http::get(&self.db_url(ao, &format!("{current}-{version}.bin"))) {
                 Ok((200, body)) => data = Some(body),
                 Ok((status, _)) => {
-                    crate::log!("apkgdb: Delta download failed with status {status}, will download full database")
+                    crate::log!(
+                        "apkgdb: Delta download failed with status {status}, will download full database"
+                    )
                 }
-                Err(e) => crate::log!("apkgdb: Delta download failed ({e}), will download full database"),
+                Err(e) => {
+                    crate::log!("apkgdb: Delta download failed ({e}), will download full database")
+                }
             }
         }
         let data = match data {
             Some(d) => d,
             None => {
-                crate::log!("apkgdb: Downloading {} database version {version} ...", self.name());
+                crate::log!(
+                    "apkgdb: Downloading {} database version {version} ...",
+                    self.name()
+                );
                 http::get_ok(&self.db_url(ao, &format!("{version}.bin")))?
             }
         };
@@ -286,8 +303,16 @@ impl Db {
             parsed.signer
         );
         let stamp = timefmt::stamp(parsed.created);
-        let added = sub.store.write().unwrap().merge_and_save(&stamp, parsed.packages)?;
-        crate::log!("apkgdb: {}/{} now at version {stamp} ({added} new packages)", self.name(), ao);
+        let added = sub
+            .store
+            .write()
+            .unwrap()
+            .merge_and_save(&stamp, parsed.packages)?;
+        crate::log!(
+            "apkgdb: {}/{} now at version {stamp} ({added} new packages)",
+            self.name(),
+            ao
+        );
         self.build_ldso(sub);
         Ok(true)
     }
@@ -303,7 +328,10 @@ impl Db {
             }
             let mut entries: Vec<ldcache::Entry> = uniq.into_values().collect();
             ldcache::sort(&mut entries);
-            crate::log!("apkgdb: built ld.so.cache containing {} libs", entries.len());
+            crate::log!(
+                "apkgdb: built ld.so.cache containing {} libs",
+                entries.len()
+            );
             ldcache::build(&entries)
         };
         *sub.ldso.write().unwrap() = Arc::new(data.clone());
@@ -394,7 +422,11 @@ impl Db {
             s
         };
         pkg.set_start_ino(start);
-        self.shared.by_ino.write().unwrap().insert(start, pkg.clone());
+        self.shared
+            .by_ino
+            .write()
+            .unwrap()
+            .insert(start, pkg.clone());
         pkgs.insert(p.hash, pkg.clone());
         crate::log!("apkgdb: spawned package {} (inode {start})", pkg.name());
         Ok(pkg)
@@ -467,7 +499,13 @@ impl SubDb {
 
     /// All package names in natural order.
     pub fn list(&self) -> Vec<String> {
-        let mut v: Vec<String> = self.store.read().unwrap().names().map(String::from).collect();
+        let mut v: Vec<String> = self
+            .store
+            .read()
+            .unwrap()
+            .names()
+            .map(String::from)
+            .collect();
         crate::collate::natural_sort(&mut v);
         v
     }

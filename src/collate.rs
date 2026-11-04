@@ -56,7 +56,9 @@ pub fn natural_cmp(a: &str, b: &str) -> Ordering {
             };
             let (sa, ea) = run(a, i);
             let (sb, eb) = run(b, j);
-            let ord = (ea - sa).cmp(&(eb - sb)).then_with(|| a[sa..ea].cmp(&b[sb..eb]));
+            let ord = (ea - sa)
+                .cmp(&(eb - sb))
+                .then_with(|| a[sa..ea].cmp(&b[sb..eb]));
             if ord != Ordering::Equal {
                 return ord;
             }
@@ -97,7 +99,10 @@ mod tests {
     #[test]
     fn natsort() {
         assert_eq!(
-            sorted(&["media-video.ffmpeg.libs.5.1.3.linux.amd64", "media-video.ffmpeg.libs.5.0.1.linux.amd64"])[0],
+            sorted(&[
+                "media-video.ffmpeg.libs.5.1.3.linux.amd64",
+                "media-video.ffmpeg.libs.5.0.1.linux.amd64"
+            ])[0],
             "media-video.ffmpeg.libs.5.0.1.linux.amd64"
         );
         assert_eq!(sorted(&["foo00001", "foo002"])[0], "foo00001");

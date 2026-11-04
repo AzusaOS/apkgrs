@@ -92,7 +92,10 @@ pub struct RemoteFile {
 
 impl std::fmt::Debug for RemoteFile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RemoteFile").field("url", &self.url).field("data_len", &self.data_len).finish()
+        f.debug_struct("RemoteFile")
+            .field("url", &self.url)
+            .field("data_len", &self.data_len)
+            .finish()
     }
 }
 
@@ -126,7 +129,12 @@ impl RemoteFile {
         if let Some(dir) = local.parent() {
             fs::create_dir_all(dir)?;
         }
-        let f = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(local)?;
+        let f = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(local)?;
         if f.metadata()?.len() != size {
             f.set_len(size)?;
         }
@@ -140,22 +148,38 @@ impl RemoteFile {
                 file.write_at(meta, u64::from(header.meta_offset))?;
             }
         }
-        if (header.sig_offset as usize) >= HEADER_LEN && u64::from(header.sig_offset) + signature.len() as u64 <= data_off {
+        if (header.sig_offset as usize) >= HEADER_LEN
+            && u64::from(header.sig_offset) + signature.len() as u64 <= data_off
+        {
             file.write_at(signature, u64::from(header.sig_offset))?;
         }
 
         let mut table = vec![0u8; header.table_len as usize];
         let n = file.read_at(&mut table, u64::from(header.table_offset))?;
         if n != table.len() || sig::sha256(&table) != header.table_hash {
-            table = http::get_range(url, u64::from(header.table_offset), u64::from(header.table_len))?;
+            table = http::get_range(
+                url,
+                u64::from(header.table_offset),
+                u64::from(header.table_len),
+            )?;
             if sig::sha256(&table) != header.table_hash {
                 return Err(Error::Integrity("corrupted hash table".into()));
             }
             file.write_at(&table, u64::from(header.table_offset))?;
         }
-        let hashes = table.chunks_exact(32).map(|c| c.try_into().unwrap()).collect();
+        let hashes = table
+            .chunks_exact(32)
+            .map(|c| c.try_into().unwrap())
+            .collect();
 
-        Ok(RemoteFile { url: url.to_string(), file, header, data_len, hashes, verified: Mutex::new(vec![false; blocks]) })
+        Ok(RemoteFile {
+            url: url.to_string(),
+            file,
+            header,
+            data_len,
+            hashes,
+            verified: Mutex::new(vec![false; blocks]),
+        })
     }
 
     /// Decoded package header.
@@ -178,7 +202,9 @@ impl RemoteFile {
     fn local_ok(&self, i: usize, buf: &mut Vec<u8>) -> Result<bool> {
         let (start, len) = self.block_range(i);
         buf.resize(len, 0);
-        let n = self.file.read_at(buf, u64::from(self.header.data_offset) + start)?;
+        let n = self
+            .file
+            .read_at(buf, u64::from(self.header.data_offset) + start)?;
         Ok(n == len && sig::sha256(buf) == self.hashes[i])
     }
 
@@ -202,7 +228,9 @@ impl RemoteFile {
             }
             // block i is missing: build a run of missing blocks starting here,
             // extended a little past `last` as read-ahead.
-            let limit = (last + READAHEAD_BLOCKS).min(self.hashes.len() - 1).min(i + MAX_RUN_BLOCKS - 1);
+            let limit = (last + READAHEAD_BLOCKS)
+                .min(self.hashes.len() - 1)
+                .min(i + MAX_RUN_BLOCKS - 1);
             let mut end = i;
             while end < limit {
                 let next = end + 1;
@@ -231,7 +259,10 @@ impl RemoteFile {
         for (k, chunk) in data.chunks(bs).enumerate() {
             let i = first + k;
             if sig::sha256(chunk) != self.hashes[i] {
-                return Err(Error::Integrity(format!("block {i} of {} failed verification", self.url)));
+                return Err(Error::Integrity(format!(
+                    "block {i} of {} failed verification",
+                    self.url
+                )));
             }
         }
         self.file.write_at(&data, off)?;
@@ -252,9 +283,14 @@ impl RemoteFile {
         let first = (offset / bs) as usize;
         let last = ((offset + len as u64 - 1) / bs) as usize;
         self.ensure(first, last)?;
-        let n = self.file.read_at(&mut buf[..len], u64::from(self.header.data_offset) + offset)?;
+        let n = self
+            .file
+            .read_at(&mut buf[..len], u64::from(self.header.data_offset) + offset)?;
         if n != len {
-            return Err(Error::Io(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "short read from cache")));
+            return Err(Error::Io(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "short read from cache",
+            )));
         }
         Ok(len)
     }

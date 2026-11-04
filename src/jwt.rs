@@ -20,14 +20,17 @@ pub struct VerifiedToken {
 pub fn verify_db_token(token: &str) -> Result<VerifiedToken> {
     let token = token.trim();
     let mut parts = token.split('.');
-    let (Some(h64), Some(p64), Some(s64), None) = (parts.next(), parts.next(), parts.next(), parts.next())
+    let (Some(h64), Some(p64), Some(s64), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
     else {
         return Err(Error::Format("jwt: expected three segments".into()));
     };
     let dec = |s: &str, what: &str| {
-        base64::decode(s.as_bytes()).ok_or_else(|| Error::Format(format!("jwt: bad base64 in {what}")))
+        base64::decode(s.as_bytes())
+            .ok_or_else(|| Error::Format(format!("jwt: bad base64 in {what}")))
     };
-    let header = Value::parse(&dec(h64, "header")?).map_err(|e| Error::Format(format!("jwt header: {e}")))?;
+    let header = Value::parse(&dec(h64, "header")?)
+        .map_err(|e| Error::Format(format!("jwt header: {e}")))?;
     if header.get("alg").and_then(Value::as_str) != Some("EdDSA") {
         return Err(Error::Integrity("jwt: unsupported algorithm".into()));
     }
@@ -43,8 +46,13 @@ pub fn verify_db_token(token: &str) -> Result<VerifiedToken> {
     if !sig::ed25519_verify(&public, signed.as_bytes(), &signature) {
         return Err(Error::Integrity("jwt: invalid signature".into()));
     }
-    let payload = Value::parse(&dec(p64, "payload")?).map_err(|e| Error::Format(format!("jwt payload: {e}")))?;
-    Ok(VerifiedToken { key_id: kid.to_string(), key_name, payload })
+    let payload = Value::parse(&dec(p64, "payload")?)
+        .map_err(|e| Error::Format(format!("jwt payload: {e}")))?;
+    Ok(VerifiedToken {
+        key_id: kid.to_string(),
+        key_name,
+        payload,
+    })
 }
 
 #[cfg(test)]
@@ -57,7 +65,10 @@ mod tests {
     #[test]
     fn verifies_real_token() {
         let t = verify_db_token(REAL).unwrap();
-        assert_eq!(t.payload.get("ver").unwrap().as_str(), Some("20261024111140"));
+        assert_eq!(
+            t.payload.get("ver").unwrap().as_str(),
+            Some("20261024111140")
+        );
         assert_eq!(t.payload.get("os").unwrap().as_str(), Some("linux"));
     }
 
@@ -65,7 +76,9 @@ mod tests {
     fn rejects_tampered() {
         // flip the payload to another version
         let mut parts: Vec<String> = REAL.split('.').map(String::from).collect();
-        parts[1] = base64::encode_url(br#"{"arch":"amd64","name":"main","os":"linux","ver":"29991024111140"}"#);
+        parts[1] = base64::encode_url(
+            br#"{"arch":"amd64","name":"main","os":"linux","ver":"29991024111140"}"#,
+        );
         assert!(verify_db_token(&parts.join(".")).is_err());
     }
 }
