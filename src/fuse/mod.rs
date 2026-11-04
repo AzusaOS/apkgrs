@@ -435,6 +435,9 @@ impl Server {
         let mut inval = Out::new();
         inval.u64(ino).u64(0).u64(0);
         let _ = (&*self.mount.dev).write(&abi::reply(0, abi::NOTIFY_INVAL_INODE, &inval.0));
+        if data.is_empty() {
+            return;
+        }
         let mut store = Out::new();
         store
             .u64(ino)
