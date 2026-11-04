@@ -1,6 +1,9 @@
 # apkg
 
 [![CI](https://github.com/AzusaOS/apkgrs/actions/workflows/ci.yml/badge.svg)](https://github.com/AzusaOS/apkgrs/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/apkg.svg)](https://crates.io/crates/apkg)
+[![docs.rs](https://img.shields.io/docsrs/apkg)](https://docs.rs/apkg)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 AzusaOS package manager, in Rust. A port of [apkg](https://github.com/AzusaOS/apkg) (Go).
 
