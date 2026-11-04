@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Cache eviction: `Db::clean_cache(max_age)` deletes cached package files
+  unused for `max_age`; the daemon runs it hourly with `-cache_days <n>`.
+
 ## [0.0.1](https://github.com/AzusaOS/apkgrs/compare/v0.0.0...v0.0.1) - 2026-11-04
 
 ### Other
@@ -19,8 +24,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Cache eviction: `Db::clean_cache(max_age)` deletes cached package files
-  unused for `max_age`; the daemon runs it hourly with `-cache_days <n>`.
 - Release channels with server-distributed version pins (`-channel`,
   `Config::channel`, `Db::set_channel`), as in apkg (Go) since 2026-03.
 - Graceful restart on `SIGUSR2`: the new process inherits the FUSE
