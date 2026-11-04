@@ -42,8 +42,15 @@ pub mod timefmt;
 
 #[cfg(feature = "fuse")]
 pub mod fuse;
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", feature = "tools"))]
 pub mod sys;
+
+#[cfg(feature = "tools")]
+pub mod convert;
+#[cfg(feature = "tools")]
+pub mod index;
+#[cfg(feature = "tools")]
+pub mod sign;
 
 pub use db::{Config, Db, Lookup, Node};
 pub use error::{Error, Result};

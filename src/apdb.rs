@@ -143,6 +143,16 @@ pub struct Database {
 /// Parse an APDB file, checking the data hash and the header signature
 /// against the trusted database keys.
 pub fn parse(data: &[u8]) -> Result<Database> {
+    parse_inner(data, true)
+}
+
+/// Like [`parse`], but accept a valid signature by any key (repository
+/// tooling tests). Never use this to load a database clients will serve.
+pub fn parse_any_signer(data: &[u8]) -> Result<Database> {
+    parse_inner(data, false)
+}
+
+fn parse_inner(data: &[u8], trusted_only: bool) -> Result<Database> {
     if data.len() < HEADER_LEN + SIGNATURE_SIZE || &data[..4] != b"APDB" {
         return Err(Error::Format("not an apkgdb file".into()));
     }
@@ -170,7 +180,11 @@ pub fn parse(data: &[u8]) -> Result<Database> {
     if sig::sha256(&data[data_loc..end]) != data_hash {
         return Err(Error::Integrity("invalid data hash".into()));
     }
-    let signer = sig::verify_db(&data[..HEADER_LEN], &data[HEADER_LEN..])?.name;
+    let signer = match sig::verify_db(&data[..HEADER_LEN], &data[HEADER_LEN..]) {
+        Ok(v) => v.name,
+        Err(e) if !trusted_only && e.to_string().contains("non trusted") => "untrusted key",
+        Err(e) => return Err(e),
+    };
 
     let mut c = Cursor::new(&data[data_loc..end]);
     let mut packages = Vec::with_capacity(count.min(1 << 20) as usize);

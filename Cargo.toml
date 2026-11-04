@@ -21,6 +21,16 @@ path = "src/bin/apkg.rs"
 # access without the FUSE server or the daemon's control plane.
 required-features = ["bin"]
 
+[[bin]]
+name = "apkg-convert"
+path = "src/bin/apkg-convert.rs"
+required-features = ["tools"]
+
+[[bin]]
+name = "apkg-index"
+path = "src/bin/apkg-index.rs"
+required-features = ["tools"]
+
 [features]
 default = []
 # Pure-Rust FUSE server speaking the kernel protocol on /dev/fuse directly
@@ -28,6 +38,10 @@ default = []
 fuse = []
 # The `apkg` daemon binary (mounts /pkg/<db>, control socket, signals).
 bin = ["fuse"]
+# Repository tools: package signing (YubiHSM 2 or a key file), the
+# `apkg-convert` (squashfs → .apkg) and `apkg-index` (database export)
+# binaries.
+tools = ["purecrypto/cipher", "purecrypto/kdf", "purecrypto/rng"]
 
 [dependencies]
 # All three are first-party pure-Rust crates: no C toolchain, and they build

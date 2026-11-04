@@ -22,6 +22,16 @@ pub fn get(url: &str) -> Result<(u16, Vec<u8>)> {
     Ok((r.status, r.body))
 }
 
+/// POST `body`; returns the status code and response body.
+pub fn post(url: &str, content_type: &str, body: Vec<u8>) -> Result<(u16, Vec<u8>)> {
+    let r = request(url)?
+        .method("POST")
+        .header("Content-Type", content_type)
+        .body(body)
+        .send()?;
+    Ok((r.status, r.body))
+}
+
 /// GET a URL and require `200 OK`.
 pub fn get_ok(url: &str) -> Result<Vec<u8>> {
     let (status, body) = get(url)?;

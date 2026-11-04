@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Graceful restart on `SIGUSR2`: the new process inherits the FUSE
   connection and the inode allocation, so the mount survives.
 - Self-updater from `azusa.apkg.core`, restricted to compatible builds.
+- Repository tools (`tools` feature): `apkg-convert` and `apkg-index`
+  binaries, ed25519 signing through a YubiHSM 2 (pure-Rust SCP03 client) or
+  a seed file, pin management in `apkg-index`.
 - Rust port of apkg: signed database sync (JWT + APDB), package lookup with
   version collation, on-demand block-verified package fetching, squashfs access
   through fstool.

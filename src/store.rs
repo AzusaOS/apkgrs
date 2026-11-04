@@ -225,6 +225,32 @@ impl Store {
         self.ldso.values()
     }
 
+    /// Every package record (metadata included), in name collation order.
+    pub fn records(&self) -> Result<Vec<PackageRecord>> {
+        let mut f = File::open(&self.file).ok();
+        let mut out = Vec::with_capacity(self.by_name.len());
+        for &i in self.by_name.values() {
+            let p = &self.packages[i];
+            let mut meta = vec![0u8; p.meta_len as usize];
+            match f.as_mut() {
+                Some(f) => read_exact_at(f, p.meta_off, &mut meta)?,
+                None if p.meta_len > 0 => return Err(Error::Invalid("index file vanished".into())),
+                None => {}
+            }
+            out.push(PackageRecord {
+                hash: p.hash,
+                size: p.size,
+                inodes: p.inodes,
+                name: p.name.clone(),
+                path: p.path.clone(),
+                header: p.header.clone(),
+                sig: p.sig.clone(),
+                meta,
+            });
+        }
+        Ok(out)
+    }
+
     /// Pinned version of `prefix` on `channel`, if any.
     pub fn pin(&self, channel: &str, prefix: &str) -> Option<&str> {
         self.pins
@@ -250,28 +276,7 @@ impl Store {
         pins: PinUpdate,
     ) -> Result<usize> {
         // Load every existing metadata blob before the file is replaced.
-        let mut f = File::open(&self.file).ok();
-        let mut all: Vec<PackageRecord> = Vec::with_capacity(self.by_name.len() + records.len());
-        for &i in self.by_name.values() {
-            let p = &self.packages[i];
-            let mut meta = vec![0u8; p.meta_len as usize];
-            if let Some(f) = f.as_mut() {
-                read_exact_at(f, p.meta_off, &mut meta)?;
-            } else if p.meta_len > 0 {
-                return Err(Error::Invalid("index file vanished".into()));
-            }
-            all.push(PackageRecord {
-                hash: p.hash,
-                size: p.size,
-                inodes: p.inodes,
-                name: p.name.clone(),
-                path: p.path.clone(),
-                header: p.header.clone(),
-                sig: p.sig.clone(),
-                meta,
-            });
-        }
-        drop(f);
+        let mut all = self.records()?;
 
         let mut name_pos: HashMap<Vec<u8>, usize> = all
             .iter()

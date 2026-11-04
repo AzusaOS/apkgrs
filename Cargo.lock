@@ -81,8 +81,6 @@ dependencies = [
 [[package]]
 name = "getrandom"
 version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
 dependencies = [
  "cfg-if",
  "libc",
@@ -289,3 +287,27 @@ name = "zeroize"
 version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
+
+[[patch.unused]]
+name = "getrandom"
+version = "0.2.17"
+
+[[patch.unused]]
+name = "mio"
+version = "1.2.3"
+
+[[patch.unused]]
+name = "rustix"
+version = "1.1.5"
+
+[[patch.unused]]
+name = "socket2"
+version = "0.5.10"
+
+[[patch.unused]]
+name = "socket2"
+version = "0.6.5"
+
+[[patch.unused]]
+name = "tokio"
+version = "1.53.1"

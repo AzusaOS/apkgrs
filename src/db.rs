@@ -651,6 +651,25 @@ impl SubDb {
         self.len() == 0
     }
 
+    /// Every package record of this database (metadata included).
+    pub fn records(&self) -> Result<Vec<crate::apdb::PackageRecord>> {
+        self.store.read().unwrap().records()
+    }
+
+    /// Every pin of this database, all channels.
+    pub fn all_pins(&self) -> Vec<crate::apdb::Pin> {
+        self.store
+            .read()
+            .unwrap()
+            .pins()
+            .map(|(c, p, v)| crate::apdb::Pin {
+                channel: c.into(),
+                prefix: p.into(),
+                version: v.into(),
+            })
+            .collect()
+    }
+
     /// Pins of `channel` as (prefix, version).
     pub fn pins(&self, channel: &str) -> Vec<(String, String)> {
         self.store

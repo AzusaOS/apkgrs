@@ -46,14 +46,16 @@ jobs:
         uses: KarpelesLab/fullrust@master
         with:
           image: ghcr.io/karpeleslab/fullrust:latest
-          args: --release --features bin
+          args: --release --features bin,tools
 
       - name: Pack and upload
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir staging
-          cp target/x86_64-unknown-linux-fullrust/release/apkg staging/
+          for b in apkg apkg-index apkg-convert; do
+            cp target/x86_64-unknown-linux-fullrust/release/$b staging/
+          done
           cp README.md LICENSE staging/
           asset="apkg-${TAG}-linux-x86_64-static.tar.gz"
           tar -C staging -czf "${asset}" .
@@ -99,14 +101,16 @@ jobs:
       - name: Build
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker }}
-        run: cargo build --release --features bin --target ${{ matrix.target }}
+        run: cargo build --release --features bin,tools --target ${{ matrix.target }}
 
       - name: Pack and upload
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir staging
-          cp target/${{ matrix.target }}/release/apkg staging/
+          for b in apkg apkg-index apkg-convert; do
+            cp target/${{ matrix.target }}/release/$b staging/
+          done
           cp README.md LICENSE staging/
           asset="apkg-${TAG}-${{ matrix.asset_suffix }}.tar.gz"
           tar -C staging -czf "${asset}" .

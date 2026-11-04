@@ -23,6 +23,7 @@ mod arch {
     pub const FCNTL: usize = 72;
     pub const RECVMSG: usize = 47;
     pub const PRLIMIT64: usize = 302;
+    pub const IOCTL: usize = 16;
 
     #[inline]
     pub unsafe fn syscall6(n: usize, a: [usize; 6]) -> isize {
@@ -56,6 +57,7 @@ mod arch {
     pub const FCNTL: usize = 25;
     pub const RECVMSG: usize = 212;
     pub const PRLIMIT64: usize = 261;
+    pub const IOCTL: usize = 29;
 
     #[inline]
     pub unsafe fn syscall6(n: usize, a: [usize; 6]) -> isize {
@@ -88,6 +90,7 @@ mod arch {
     pub const FCNTL: usize = 0;
     pub const RECVMSG: usize = 0;
     pub const PRLIMIT64: usize = 0;
+    pub const IOCTL: usize = 0;
 
     pub unsafe fn syscall6(_: usize, _: [usize; 6]) -> isize {
         -38 // ENOSYS
@@ -322,4 +325,62 @@ pub fn recv_fd(sock: i32) -> io::Result<i32> {
         ));
     }
     Ok(i32::from_ne_bytes(bytes[16..20].try_into().unwrap()))
+}
+
+/// Read a line from the terminal on `fd` with echo turned off (for
+/// passphrases). The trailing newline is removed.
+pub fn read_password(fd: i32) -> io::Result<String> {
+    const TCGETS: usize = 0x5401;
+    const TCSETS: usize = 0x5402;
+    const ECHO: u32 = 0o10;
+    // struct termios: c_iflag, c_oflag, c_cflag, c_lflag (u32 each), then
+    // c_line and c_cc; 60 bytes is more than the kernel copies.
+    let mut t = [0u8; 60];
+    unsafe {
+        syscall(
+            arch::IOCTL,
+            [fd as usize, TCGETS, t.as_mut_ptr() as usize, 0, 0, 0],
+        )
+    }?;
+    let saved = t;
+    let lflag = u32::from_ne_bytes(t[12..16].try_into().unwrap()) & !ECHO;
+    t[12..16].copy_from_slice(&lflag.to_ne_bytes());
+    unsafe {
+        syscall(
+            arch::IOCTL,
+            [fd as usize, TCSETS, t.as_ptr() as usize, 0, 0, 0],
+        )
+    }?;
+    let mut line = Vec::new();
+    let res = (|| -> io::Result<()> {
+        let mut b = [0u8; 1];
+        loop {
+            let n = unsafe {
+                syscall(
+                    arch_read(),
+                    [fd as usize, b.as_mut_ptr() as usize, 1, 0, 0, 0],
+                )
+            }?;
+            if n == 0 || b[0] == b'\n' {
+                return Ok(());
+            }
+            line.push(b[0]);
+        }
+    })();
+    let _ = unsafe {
+        syscall(
+            arch::IOCTL,
+            [fd as usize, TCSETS, saved.as_ptr() as usize, 0, 0, 0],
+        )
+    };
+    res?;
+    if line.last() == Some(&b'\r') {
+        line.pop();
+    }
+    String::from_utf8(line)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "passphrase is not UTF-8"))
+}
+
+fn arch_read() -> usize {
+    if cfg!(target_arch = "aarch64") { 63 } else { 0 }
 }

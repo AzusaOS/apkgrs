@@ -7,7 +7,7 @@
 
 AzusaOS package manager, in Rust. A port of [apkg](https://github.com/AzusaOS/apkg) (Go).
 
-It ships as two things:
+It ships as three things:
 
 * **A library** (crate `apkg`) that gives access to AzusaOS packages. It keeps a
   signature-verified local index of a package database, resolves package names
@@ -15,6 +15,8 @@ It ships as two things:
   are downloaded on demand, block by block.
 * **The `apkg` daemon** (features `fuse` + `bin`). It mounts the database as
   `/pkg/main` through FUSE. This is the binary AzusaOS and its tooling use.
+* **Repository tools** (feature `tools`): `apkg-convert` builds signed
+  packages from squashfs images, and `apkg-index` publishes databases.
 
 Everything is pure Rust with no C dependencies. The only dependencies are the
 first-party [`rsurl`](https://crates.io/crates/rsurl) (HTTP/TLS),
@@ -83,6 +85,43 @@ are unaffected. A channel without pins, or `latest`, always resolves to the
 newest version. If a pinned version is missing, the latest is used and a
 warning is logged.
 
+## Repository tools
+
+Both tools sign with ed25519 keys selected by the `HSM` environment variable,
+as the Go tools did:
+
+* `HSM=yubihsm2` uses a YubiHSM 2 through `yubihsm-connector`
+  (`YUBIHSM_CONNECTOR`, default `localhost:12345`). It authenticates with auth
+  key 1, taking the passphrase from `YUBIHSM_PASSWORD` or prompting for it. Keys
+  are found by label: `pkg_sign_ed25519` for packages, `tpdb_sign_ed25519` for
+  databases. The SCP03 session is implemented in Rust on purecrypto.
+* `HSM=file:<path>` uses an ed25519 seed (64 hex characters) instead. It is for
+  tests only and needs `-allow_untrusted`, since clients only trust the
+  built-in keys.
+
+```console
+$ HSM=yubihsm2 apkg-convert sys-libs.zlib.libs.1.3.1.linux.amd64.squashfs
+# → ~/projects/apkg-tools/repo/apkg/dist/main/sys-libs/zlib/libs/sys-libs.zlib.libs.1.3.1.linux.amd64-<hash>.apkg
+
+$ HSM=yubihsm2 apkg-index -pin stable:dev-lang.python.core=3.12
+```
+
+`apkg-convert` writes `<category>/<name>/<subcat>/<full name>-<hash7>.apkg`
+under `-out`. The metadata includes:
+* `provides`, built from per-subcategory globs;
+* `.virtual` links;
+* for `libs` packages, the embedded `.ld.so.cache`.
+
+Its output is byte-identical to the Go converter's: a reconverted published
+package gets the same header hash.
+
+`apkg-index` starts from the currently published database of each platform it
+touches. It adds every `.apkg` under `-dir`; an empty `.apkg` file removes
+that package instead. It applies `-pin`/`-unpin` changes, signs the result,
+and uploads `<version>.bin`, `LATEST.txt` and `LATEST.jwt` with `aws s3`
+(`-s3`, `-aws_profile`). Use `-no_upload -out <dir>` to keep the files
+locally instead.
+
 ## Using the library
 
 ```toml
@@ -130,9 +169,9 @@ verifies each block itself, so it would stay safe even over plain HTTP.
 ## Building
 
 ```console
-$ cargo build --release --features bin          # glibc/musl build
+$ cargo build --release --features bin,tools    # glibc/musl build, all binaries
 $ docker run --rm -v "$PWD":/src ghcr.io/karpeleslab/fullrust:latest \
-      build --release --features bin             # static libc-free build
+      build --release --features bin,tools       # static libc-free build
 ```
 
 Minimum Rust version: 1.95 (edition 2024).
@@ -150,8 +189,9 @@ Minimum Rust version: 1.95 (edition 2024).
   INIT that never comes, and renumbered inodes.
 * The self-updater only installs builds of this daemon. It recognizes them
   by a marker string, so it never switches back to the Go binary.
-* Not ported yet: `-load_unsigned` (loading unsigned local squashfs images)
-  and the `apkg-index`/`apkg-convert` repository tools.
+* `apkg-index` can set and remove pins (`-pin`, `-unpin`). The Go tools had
+  no way to do it.
+* Not ported yet: `-load_unsigned` (loading unsigned local squashfs images).
 
 ## License
 
