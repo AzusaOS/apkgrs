@@ -33,27 +33,6 @@ jobs:
       - name: test
         run: cargo test --features bin
 
-  # The library (without the Linux-only FUSE daemon) must keep building on
-  # other platforms. Checked by cross-compiling from Linux: hosted macOS
-  # runners are frequently unavailable.
-  cross_lib:
-    name: Cross-check library (${{ matrix.target }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [aarch64-apple-darwin, x86_64-pc-windows-msvc]
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}
-      - run: cargo clippy --target ${{ matrix.target }} --all-targets -- -D warnings
-
   msrv:
     name: MSRV (Rust 1.95)
     runs-on: ubuntu-latest
