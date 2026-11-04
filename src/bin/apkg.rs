@@ -35,6 +35,8 @@ struct Opts {
     ctrl: bool,
     channel: String,
     self_update: bool,
+    /// Evict cached packages unused for this many days (0: never).
+    cache_days: u64,
 }
 
 fn usage() -> ! {
@@ -53,6 +55,7 @@ fn usage() -> ! {
                              \"latest\" ignores pins)\n  \
            -no_ctrl          do not open the control socket\n  \
            -no_self_update   do not install newer apkg builds from azusa.apkg.core\n  \
+           -cache_days <n>   hourly, delete cached packages unused for n days (default: 0, keep)\n  \
            -version          print version and exit",
         apkg::db::DEFAULT_PREFIX
     );
@@ -69,6 +72,7 @@ fn parse_args() -> Opts {
         ctrl: true,
         channel: apkg::db::DEFAULT_CHANNEL.into(),
         self_update: true,
+        cache_days: 0,
     };
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -92,6 +96,7 @@ fn parse_args() -> Opts {
             "no_ctrl" => o.ctrl = false,
             "channel" => o.channel = val(),
             "no_self_update" => o.self_update = false,
+            "cache_days" => o.cache_days = val().parse().unwrap_or_else(|_| usage()),
             "load_unsigned" => {
                 log!("apkg: -load_unsigned is not supported by this version, ignored")
             }
@@ -286,6 +291,7 @@ fn main() {
     // periodic updates
     {
         let db = db.clone();
+        let cache_age = Duration::from_secs(opts.cache_days.saturating_mul(86400));
         std::thread::Builder::new()
             .name("updater".into())
             .spawn(move || {
@@ -293,6 +299,19 @@ fn main() {
                     std::thread::sleep(UPDATE_INTERVAL);
                     if let Err(e) = db.update() {
                         log!("apkgdb: update failed: {e}");
+                    }
+                    if !cache_age.is_zero() {
+                        match db.clean_cache(cache_age) {
+                            Ok(c) if c.removed > 0 => log!(
+                                "apkgdb: cache cleanup: removed {} packages ({} MiB), kept {} ({} MiB)",
+                                c.removed,
+                                c.freed >> 20,
+                                c.kept,
+                                c.kept_bytes >> 20
+                            ),
+                            Ok(_) => {}
+                            Err(e) => log!("apkgdb: cache cleanup failed: {e}"),
+                        }
                     }
                 }
             })

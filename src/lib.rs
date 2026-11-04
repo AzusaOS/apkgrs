@@ -25,6 +25,7 @@
 
 pub mod apdb;
 pub mod base64;
+pub mod cache;
 pub mod collate;
 pub mod db;
 mod error;

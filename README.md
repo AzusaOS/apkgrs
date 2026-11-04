@@ -49,6 +49,7 @@ Options:
 | `-channel <name>` | `stable` | release channel for version pins (`latest` ignores pins) |
 | `-no_ctrl` | | don't open the control socket |
 | `-no_self_update` | | don't install newer daemon builds from `azusa.apkg.core` |
+| `-cache_days <n>` | `0` (keep everything) | hourly, delete cached packages unused for `n` days |
 
 Non-root mounts need `fusermount3` (or `fusermount`). As root, if
 `<base>/.<db>-rw` exists, the package tree is mounted read-only on
@@ -141,6 +142,12 @@ let conf = zlib.read_file("/.ld.so.conf")?;
 db.update()?;                                        // pull a newer database
 # Ok::<(), apkg::Error>(())
 ```
+
+Files are read in ranges (`read_at`); only the blocks touched are downloaded
+and verified, into sparse `.apkg` files under `<path>/<db>/`. That cache is
+never trimmed on its own; `db.clean_cache(max_age)` deletes the package
+files not used for `max_age` (packages open in the process are kept unless
+idle that long, and are transparently re-fetched if used again).
 
 See `examples/browse.rs`:
 

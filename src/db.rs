@@ -493,6 +493,72 @@ impl Db {
         Ok(pkg)
     }
 
+    /// Delete cached package files not used for `max_age`.
+    ///
+    /// A package counts as used when this process accessed it (packages it
+    /// has open are kept unless idle that long, and are closed when
+    /// evicted; the next access reopens and downloads again) or, for files
+    /// this process never opened, when the file was last written (opening a
+    /// package rewrites its header, so the modification time is the last
+    /// time any process opened it). Empty directories left behind are
+    /// removed. Only `.apkg` files below `<path>/<db name>/` are touched.
+    pub fn clean_cache(&self, max_age: std::time::Duration) -> Result<crate::cache::CacheCleanup> {
+        use crate::cache;
+        let cutoff = std::time::SystemTime::now()
+            .checked_sub(max_age)
+            .unwrap_or(std::time::UNIX_EPOCH);
+        let root = self.shared.cfg.path.join(&self.shared.cfg.name);
+        let mut out = cache::CacheCleanup::default();
+
+        let instances: Vec<Arc<Package>> = self
+            .shared
+            .packages
+            .lock()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect();
+        for p in &instances {
+            match p.evict_if_idle(cutoff)? {
+                crate::package::Evict::Removed(freed) => {
+                    out.removed += 1;
+                    out.freed += freed;
+                }
+                crate::package::Evict::Absent => {}
+                crate::package::Evict::Kept => {
+                    out.kept += 1;
+                    out.kept_bytes +=
+                        std::fs::metadata(p.local_path()).map_or(0, |m| cache::disk_usage(&m));
+                }
+            }
+        }
+
+        let mut files = Vec::new();
+        cache::package_files(&root, &mut files)?;
+        {
+            // packages instantiated meanwhile must not lose their file
+            let pkgs = self.shared.packages.lock().unwrap();
+            let known: std::collections::HashSet<&Path> =
+                pkgs.values().map(|p| p.local_path()).collect();
+            for f in files.iter().filter(|f| !known.contains(f.as_path())) {
+                match cache::remove_if_older(f, cutoff) {
+                    Ok(Ok(freed)) => {
+                        out.removed += 1;
+                        out.freed += freed;
+                    }
+                    Ok(Err(size)) => {
+                        out.kept += 1;
+                        out.kept_bytes += size;
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e.into()),
+                }
+            }
+        }
+        cache::prune_empty_dirs(&root)?;
+        Ok(out)
+    }
+
     /// Snapshot of the inode allocation, so a new process can take over a
     /// live mount and keep every inode number the kernel already knows.
     pub fn inode_state(&self) -> InodeState {

@@ -14,7 +14,7 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use fstool::block::BlockDevice;
 use fstool::fs::EntryKind;
@@ -194,6 +194,13 @@ enum State {
     Failed(Instant, String),
 }
 
+/// Result of [`Package::evict_if_idle`].
+pub(crate) enum Evict {
+    Kept,
+    Removed(u64),
+    Absent,
+}
+
 /// A package of a database.
 pub struct Package {
     name: String,
@@ -208,6 +215,8 @@ pub struct Package {
     meta: Vec<u8>,
     archos: crate::osarch::ArchOs,
     start_ino: AtomicU64,
+    /// Last access, seconds since the Unix epoch (0: never).
+    last_used: AtomicU64,
     state: Mutex<State>,
 }
 
@@ -255,6 +264,7 @@ impl Package {
             sig,
             meta,
             start_ino: AtomicU64::new(0),
+            last_used: AtomicU64::new(0),
             state: Mutex::new(State::Closed),
         }
     }
@@ -317,7 +327,56 @@ impl Package {
         self.start_ino.store(v, Ordering::Release);
     }
 
+    /// When the package was last accessed by this process, if ever.
+    pub fn last_used(&self) -> Option<SystemTime> {
+        match self.last_used.load(Ordering::Relaxed) {
+            0 => None,
+            s => Some(UNIX_EPOCH + Duration::from_secs(s)),
+        }
+    }
+
+    /// Whether the package image is currently open in this process.
+    pub fn is_open(&self) -> bool {
+        matches!(*self.state.lock().unwrap(), State::Open(_))
+    }
+
+    /// Drop the local cache file if the package was not used since
+    /// `cutoff`, closing it first. The next access reopens it and fetches
+    /// again.
+    pub(crate) fn evict_if_idle(&self, cutoff: SystemTime) -> Result<Evict> {
+        let mut st = self.state.lock().unwrap();
+        if let Some(t) = self.last_used()
+            && t >= cutoff
+        {
+            if matches!(*st, State::Open(_)) {
+                // in use: make the age visible to other processes' cleanup
+                if let Ok(f) = std::fs::File::options().write(true).open(&self.local) {
+                    let _ = f.set_modified(t);
+                }
+            }
+            return Ok(Evict::Kept);
+        }
+        let res = match std::fs::symlink_metadata(&self.local) {
+            Ok(m) if m.is_file() => {
+                if self.last_used().is_none() && m.modified().is_ok_and(|t| t >= cutoff) {
+                    return Ok(Evict::Kept);
+                }
+                std::fs::remove_file(&self.local)?;
+                Evict::Removed(crate::cache::disk_usage(&m))
+            }
+            Ok(_) => return Ok(Evict::Kept),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Evict::Absent,
+            Err(e) => return Err(e.into()),
+        };
+        *st = State::Closed;
+        Ok(res)
+    }
+
     fn opened(&self) -> Result<Arc<Opened>> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(1, |d| d.as_secs().max(1));
+        self.last_used.store(now, Ordering::Relaxed);
         let mut st = self.state.lock().unwrap();
         match &*st {
             State::Open(o) => return Ok(o.clone()),
