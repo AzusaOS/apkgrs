@@ -15,10 +15,21 @@ use crate::http;
 use crate::pkgfile::{HEADER_LEN, Header};
 use crate::sig;
 
-/// Largest single range request, in blocks.
-const MAX_RUN_BLOCKS: usize = 64;
-/// Blocks speculatively fetched after a miss (if also missing).
-const READAHEAD_BLOCKS: usize = 8;
+/// Largest single range request, in bytes.
+const MAX_RUN_BYTES: u64 = 16 << 20;
+/// Read-ahead after a random miss, in bytes.
+const MIN_READAHEAD: u64 = 512 << 10;
+/// Read-ahead ceiling; it doubles on each sequential miss up to this.
+const MAX_READAHEAD: u64 = 8 << 20;
+
+struct Blocks {
+    /// One flag per block: verified present in the local file.
+    verified: Vec<bool>,
+    /// Block right after the last fetched run (sequential detection).
+    next_seq: usize,
+    /// Current read-ahead window, bytes.
+    readahead: u64,
+}
 
 #[cfg(any(unix, target_os = "fullrust"))]
 mod pio {
@@ -86,8 +97,7 @@ pub struct RemoteFile {
     /// Length of the squashfs image.
     data_len: u64,
     hashes: Vec<[u8; 32]>,
-    /// One flag per block: verified present in the local file.
-    verified: Mutex<Vec<bool>>,
+    blocks: Mutex<Blocks>,
 }
 
 impl std::fmt::Debug for RemoteFile {
@@ -176,7 +186,11 @@ impl RemoteFile {
             header,
             data_len,
             hashes,
-            verified: Mutex::new(vec![false; blocks]),
+            blocks: Mutex::new(Blocks {
+                verified: vec![false; blocks],
+                next_seq: usize::MAX,
+                readahead: MIN_READAHEAD,
+            }),
         })
     }
 
@@ -206,42 +220,53 @@ impl RemoteFile {
         Ok(n == len && sig::sha256(buf) == self.hashes[i])
     }
 
+    fn blocks_in(&self, bytes: u64) -> usize {
+        (bytes / u64::from(self.header.block_size)).max(1) as usize
+    }
+
     /// Make blocks `first..=last` present and verified.
     fn ensure(&self, first: usize, last: usize) -> Result<()> {
-        let mut verified = self.verified.lock().unwrap();
-        if verified[first..=last].iter().all(|&v| v) {
+        let mut st = self.blocks.lock().unwrap();
+        if st.verified[first..=last].iter().all(|&v| v) {
             return Ok(());
         }
         let mut buf = Vec::new();
         let mut i = first;
         while i <= last {
-            if verified[i] {
+            if st.verified[i] {
                 i += 1;
                 continue;
             }
             if self.local_ok(i, &mut buf)? {
-                verified[i] = true;
+                st.verified[i] = true;
                 i += 1;
                 continue;
             }
-            // block i is missing: build a run of missing blocks starting here,
-            // extended a little past `last` as read-ahead.
-            let limit = (last + READAHEAD_BLOCKS)
+            // block i is missing: fetch a run of missing blocks starting
+            // here, extended past `last` by the read-ahead window, which
+            // grows while access stays sequential.
+            st.readahead = if i == st.next_seq {
+                (st.readahead * 2).min(MAX_READAHEAD)
+            } else {
+                MIN_READAHEAD
+            };
+            let limit = (last + self.blocks_in(st.readahead))
                 .min(self.hashes.len() - 1)
-                .min(i + MAX_RUN_BLOCKS - 1);
+                .min(i + self.blocks_in(MAX_RUN_BYTES) - 1);
             let mut end = i;
             while end < limit {
                 let next = end + 1;
-                if verified[next] {
+                if st.verified[next] {
                     break;
                 }
                 if self.local_ok(next, &mut buf)? {
-                    verified[next] = true;
+                    st.verified[next] = true;
                     break;
                 }
                 end = next;
             }
-            self.fetch(i, end, &mut verified)?;
+            self.fetch(i, end, &mut st.verified)?;
+            st.next_seq = end + 1;
             i = end + 1;
         }
         Ok(())
@@ -298,7 +323,7 @@ impl RemoteFile {
         let n = self.hashes.len();
         let mut i = 0;
         while i < n {
-            let last = (i + MAX_RUN_BLOCKS - 1).min(n - 1);
+            let last = (i + self.blocks_in(MAX_RUN_BYTES) - 1).min(n - 1);
             self.ensure(i, last)?;
             i = last + 1;
         }
