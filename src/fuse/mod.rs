@@ -17,8 +17,8 @@ use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, RwLock};
 
 use abi::{FileAttr, InHeader, Out, u32_at, u64_at};
 
@@ -184,6 +184,32 @@ impl Mount {
         Err(last)
     }
 
+    /// Adopt a FUSE connection inherited from a previous process (see
+    /// [`Server::graceful_exec`] and [`Handoff::from_env`]). The kernel
+    /// mount already exists; unmounting later works as for a fresh mount.
+    pub fn inherited(handoff: &Handoff) -> io::Result<Mount> {
+        use std::os::fd::FromRawFd;
+        if handoff.fd < 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "bad inherited fd",
+            ));
+        }
+        let dev = unsafe { File::from_raw_fd(handoff.fd) };
+        // keep it from leaking into children again
+        sys::set_cloexec(handoff.fd)?;
+        Ok(Mount {
+            dev: Arc::new(dev),
+            mountpoint: handoff.mountpoint.clone(),
+            kind: if sys::geteuid() == 0 {
+                MountKind::Direct
+            } else {
+                MountKind::Fusermount
+            },
+            unmounted: AtomicBool::new(false),
+        })
+    }
+
     /// Mountpoint path.
     pub fn mountpoint(&self) -> &Path {
         &self.mountpoint
@@ -227,6 +253,51 @@ pub struct Server {
     mount: Arc<Mount>,
     minor: AtomicU32,
     initialized: AtomicBool,
+    /// Held (shared) while a request read from the kernel is being
+    /// answered; taken exclusively before handing the connection over.
+    gate: RwLock<()>,
+}
+
+/// Environment variables carrying a live mount to a new process. The fd
+/// and mountpoint names match the Go daemon's.
+pub const ENV_FD: &str = "APKG_FUSE_FD";
+pub const ENV_MOUNTPOINT: &str = "APKG_MOUNT_POINT";
+pub const ENV_STATE: &str = "APKG_FUSE_STATE";
+pub const ENV_MINOR: &str = "APKG_FUSE_MINOR";
+
+/// A FUSE connection handed over by a previous process.
+#[derive(Debug, Clone)]
+pub struct Handoff {
+    pub fd: i32,
+    pub mountpoint: PathBuf,
+    /// Inode allocation state file written by the previous process.
+    pub state: Option<PathBuf>,
+    /// Protocol minor negotiated by the previous process, if known.
+    pub minor: Option<u32>,
+}
+
+impl Handoff {
+    /// Read (and remove from the environment) a handoff left by
+    /// [`Server::graceful_exec`] or by the Go daemon's graceful restart.
+    ///
+    /// # Safety
+    /// Modifies the process environment: call before spawning threads.
+    pub unsafe fn from_env() -> Option<Handoff> {
+        let fd = std::env::var(ENV_FD).ok();
+        let mp = std::env::var_os(ENV_MOUNTPOINT);
+        let state = std::env::var_os(ENV_STATE).map(PathBuf::from);
+        let minor = std::env::var(ENV_MINOR).ok().and_then(|m| m.parse().ok());
+        for k in [ENV_FD, ENV_MOUNTPOINT, ENV_STATE, ENV_MINOR] {
+            unsafe { std::env::remove_var(k) };
+        }
+        let fd: i32 = fd?.parse().ok()?;
+        Some(Handoff {
+            fd,
+            mountpoint: PathBuf::from(mp?),
+            state,
+            minor,
+        })
+    }
 }
 
 impl Server {
@@ -237,6 +308,7 @@ impl Server {
             mount: Arc::new(mount),
             minor: AtomicU32::new(0),
             initialized: AtomicBool::new(false),
+            gate: RwLock::new(()),
         });
         // push ld.so.cache changes into the kernel page cache
         let weak = Arc::downgrade(&s);
@@ -246,6 +318,46 @@ impl Server {
             }
         }));
         s
+    }
+
+    /// Serve a connection inherited from a previous process: the kernel
+    /// handshake (INIT) already happened, so requests are served at once.
+    pub fn new_inherited(db: Db, mount: Mount, minor: Option<u32>) -> Arc<Server> {
+        let s = Self::new(db, mount);
+        s.minor.store(minor.unwrap_or(28), Ordering::Release);
+        s.initialized.store(true, Ordering::Release);
+        s
+    }
+
+    /// Replace this process with `exe`, handing it the live connection:
+    /// in-flight requests are answered first, the inode allocation is saved
+    /// to `state_file`, and the new process picks the mount up through the
+    /// environment (see [`Handoff::from_env`]). Returns only on failure.
+    pub fn graceful_exec(&self, exe: &Path, state_file: &Path) -> io::Error {
+        use std::os::unix::process::CommandExt;
+        if let Err(e) = std::fs::write(state_file, self.db.inode_state().encode()) {
+            return e;
+        }
+        let fd = self.mount.dev.as_raw_fd();
+        // stop answering: wait for every request being processed
+        let _gate = self.gate.write().unwrap();
+        if let Err(e) = sys::clear_cloexec(fd) {
+            return e;
+        }
+        crate::log!(
+            "apkgfs: graceful exec to {} (fd={fd}, mount={})",
+            exe.display(),
+            self.mount.mountpoint.display()
+        );
+        let err = Command::new(exe)
+            .args(std::env::args_os().skip(1))
+            .env(ENV_FD, fd.to_string())
+            .env(ENV_MOUNTPOINT, &self.mount.mountpoint)
+            .env(ENV_STATE, state_file)
+            .env(ENV_MINOR, self.minor.load(Ordering::Acquire).to_string())
+            .exec();
+        let _ = sys::set_cloexec(fd);
+        err
     }
 
     /// The underlying mount.
@@ -291,6 +403,7 @@ impl Server {
                     }
                 },
             };
+            let _gate = self.gate.read().unwrap();
             let req = &buf[..n];
             let Some(h) = InHeader::parse(req) else {
                 continue;

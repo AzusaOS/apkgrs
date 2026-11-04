@@ -22,7 +22,7 @@ use crate::jwt;
 use crate::ldcache;
 use crate::osarch::ArchOs;
 use crate::package::Package;
-use crate::store::Store;
+use crate::store::{PinUpdate, Store};
 use crate::timefmt;
 
 /// Default repository URL prefix.
@@ -46,7 +46,17 @@ pub struct Config {
     pub path: PathBuf,
     /// Platform of the primary database.
     pub archos: ArchOs,
+    /// Release channel used to resolve partial names (`stable` by
+    /// default). Channels carry version pins distributed with the database;
+    /// [`LATEST_CHANNEL`] ignores pins and always picks the newest version,
+    /// as does any channel without pins.
+    pub channel: String,
 }
+
+/// Default release channel.
+pub const DEFAULT_CHANNEL: &str = "stable";
+/// Channel that ignores every pin.
+pub const LATEST_CHANNEL: &str = "latest";
 
 impl Config {
     /// Configuration for database `name` stored under `path`, for the host
@@ -57,6 +67,7 @@ impl Config {
             name: name.to_string(),
             path: path.into(),
             archos: ArchOs::host(),
+            channel: DEFAULT_CHANNEL.to_string(),
         }
     }
 }
@@ -97,6 +108,7 @@ struct Shared {
     subs: RwLock<HashMap<ArchOs, Arc<SubDb>>>,
     sub_create: Mutex<()>,
     notify: RwLock<Option<NotifyFn>>,
+    channel: RwLock<String>,
 }
 
 /// The database of one platform.
@@ -124,8 +136,10 @@ impl Db {
     /// copy yet.
     pub fn open(cfg: Config) -> Result<Db> {
         std::fs::create_dir_all(&cfg.path)?;
+        let channel = RwLock::new(cfg.channel.clone());
         let db = Db {
             shared: Arc::new(Shared {
+                channel,
                 cfg,
                 next_ino: Mutex::new(FIRST_PKG_INO),
                 by_ino: RwLock::new(BTreeMap::new()),
@@ -153,6 +167,17 @@ impl Db {
     /// Platform of the primary database.
     pub fn archos(&self) -> ArchOs {
         self.shared.cfg.archos
+    }
+
+    /// Active release channel.
+    pub fn channel(&self) -> String {
+        self.shared.channel.read().unwrap().clone()
+    }
+
+    /// Switch the release channel used to resolve partial names. Applies
+    /// to every platform's database.
+    pub fn set_channel(&self, channel: &str) {
+        *self.shared.channel.write().unwrap() = channel.to_string();
     }
 
     /// Set the virtual-file change callback.
@@ -259,13 +284,17 @@ impl Db {
         }
 
         let mut data = None;
+        let mut delta = false;
         if !current.is_empty() {
             crate::log!(
                 "apkgdb: Downloading {} database delta to version {version} ...",
                 self.name()
             );
             match http::get(&self.db_url(ao, &format!("{current}-{version}.bin"))) {
-                Ok((200, body)) => data = Some(body),
+                Ok((200, body)) => {
+                    data = Some(body);
+                    delta = true;
+                }
                 Ok((status, _)) => {
                     crate::log!(
                         "apkgdb: Delta download failed with status {status}, will download full database"
@@ -297,17 +326,24 @@ impl Db {
             )));
         }
         crate::log!(
-            "apkgdb: reading database generated on {} ({} packages, signed by {})",
+            "apkgdb: reading database generated on {} ({} packages, {} pins, signed by {})",
             timefmt::human(parsed.created),
             parsed.packages.len(),
+            parsed.pins.len(),
             parsed.signer
         );
         let stamp = timefmt::stamp(parsed.created);
+        // a full database carries the complete pin set; a delta only changes
+        let pins = if delta {
+            PinUpdate::Merge(parsed.pins)
+        } else {
+            PinUpdate::Replace(parsed.pins)
+        };
         let added = sub
             .store
             .write()
             .unwrap()
-            .merge_and_save(&stamp, parsed.packages)?;
+            .merge_and_save(&stamp, parsed.packages, pins)?;
         crate::log!(
             "apkgdb: {}/{} now at version {stamp} ({added} new packages)",
             self.name(),
@@ -380,10 +416,28 @@ impl Db {
         }
         let store = sub.store.read().unwrap();
         if let Some(p) = store.get(name) {
-            return Ok(Lookup::PackageRoot(self.instantiate(&store, p)?));
+            return Ok(Lookup::PackageRoot(
+                self.instantiate(&store, p, sub.archos, None)?,
+            ));
+        }
+        // a pin on the active channel constrains the version
+        let channel = self.channel();
+        if channel != LATEST_CHANNEL
+            && let Some(pin) = store.pin(&channel, name)
+        {
+            if let Some(p) = store.latest_with_prefix(&format!("{name}.{pin}")) {
+                return Ok(Lookup::PackageLink(
+                    self.instantiate(&store, p, sub.archos, None)?,
+                ));
+            }
+            crate::log!(
+                "apkgdb: warning: pinned version {pin:?} for {name:?} not found, falling back to latest"
+            );
         }
         let p = store.latest_with_prefix(name).ok_or(Error::NotFound)?;
-        Ok(Lookup::PackageLink(self.instantiate(&store, p)?))
+        Ok(Lookup::PackageLink(
+            self.instantiate(&store, p, sub.archos, None)?,
+        ))
     }
 
     /// Find a package by (partial) name and return it. Partial names resolve
@@ -395,7 +449,13 @@ impl Db {
         }
     }
 
-    fn instantiate(&self, store: &Store, p: &crate::store::StoredPackage) -> Result<Arc<Package>> {
+    fn instantiate(
+        &self,
+        store: &Store,
+        p: &crate::store::StoredPackage,
+        archos: ArchOs,
+        at: Option<u64>,
+    ) -> Result<Arc<Package>> {
         let mut pkgs = self.shared.packages.lock().unwrap();
         if let Some(pkg) = pkgs.get(&p.hash) {
             return Ok(pkg.clone());
@@ -413,12 +473,13 @@ impl Db {
             p.header.clone(),
             p.sig.clone(),
             meta,
+            archos,
         ));
         // allocate inodes: one for the symlink, then the image's inodes
         let start = {
             let mut next = self.shared.next_ino.lock().unwrap();
-            let s = *next;
-            *next += u64::from(p.inodes) + 1;
+            let s = at.unwrap_or(*next);
+            *next = (*next).max(s + u64::from(p.inodes) + 1);
             s
         };
         pkg.set_start_ino(start);
@@ -430,6 +491,56 @@ impl Db {
         pkgs.insert(p.hash, pkg.clone());
         crate::log!("apkgdb: spawned package {} (inode {start})", pkg.name());
         Ok(pkg)
+    }
+
+    /// Snapshot of the inode allocation, so a new process can take over a
+    /// live mount and keep every inode number the kernel already knows.
+    pub fn inode_state(&self) -> InodeState {
+        let next = *self.shared.next_ino.lock().unwrap();
+        let packages = self
+            .shared
+            .by_ino
+            .read()
+            .unwrap()
+            .iter()
+            .map(|(&start, p)| (start, p.archos(), *p.hash()))
+            .collect();
+        InodeState { next, packages }
+    }
+
+    /// Re-create the packages of `state` at their recorded inode numbers.
+    /// Call before serving requests. Packages that can no longer be found
+    /// are skipped (their inodes will report "not found").
+    pub fn restore_inodes(&self, state: &InodeState) -> Result<()> {
+        {
+            let mut next = self.shared.next_ino.lock().unwrap();
+            *next = (*next).max(state.next);
+        }
+        for &(start, ao, hash) in &state.packages {
+            let sub = match self.sub(ao) {
+                Ok(s) => s,
+                Err(e) => {
+                    crate::log!("apkgdb: restore: database {ao} unavailable: {e}");
+                    continue;
+                }
+            };
+            let store = sub.store.read().unwrap();
+            match store.get_by_hash(&hash) {
+                Some(p) => {
+                    self.instantiate(&store, p, ao, Some(start))?;
+                }
+                None => crate::log!("apkgdb: restore: package at inode {start} no longer exists"),
+            }
+        }
+        Ok(())
+    }
+
+    /// Start allocating inodes at `base` or above. Used when taking over a
+    /// mount whose previous inode numbering is unknown, so stale kernel
+    /// references cannot alias new packages.
+    pub fn reserve_inodes(&self, base: u64) {
+        let mut next = self.shared.next_ino.lock().unwrap();
+        *next = (*next).max(base);
     }
 
     /// Inode number for a lookup result.
@@ -466,6 +577,49 @@ impl Db {
     }
 }
 
+/// Inode allocation snapshot (see [`Db::inode_state`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InodeState {
+    /// Next free inode.
+    pub next: u64,
+    /// (start inode, platform, package hash)
+    pub packages: Vec<(u64, ArchOs, [u8; 32])>,
+}
+
+impl InodeState {
+    /// Text encoding: a header line, then one line per package.
+    pub fn encode(&self) -> String {
+        let mut out = format!("apkg-inodes 1 {}\n", self.next);
+        for (start, ao, hash) in &self.packages {
+            let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
+            out.push_str(&format!("{start} {ao} {hex}\n"));
+        }
+        out
+    }
+
+    /// Parse [`InodeState::encode`] output.
+    pub fn decode(s: &str) -> Option<InodeState> {
+        let mut lines = s.lines();
+        let next = lines.next()?.strip_prefix("apkg-inodes 1 ")?.parse().ok()?;
+        let mut packages = Vec::new();
+        for l in lines {
+            let mut f = l.split(' ');
+            let start = f.next()?.parse().ok()?;
+            let ao = ArchOs::parse(f.next()?)?;
+            let hex = f.next()?;
+            if hex.len() != 64 {
+                return None;
+            }
+            let mut hash = [0u8; 32];
+            for (i, b) in hash.iter_mut().enumerate() {
+                *b = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?;
+            }
+            packages.push((start, ao, hash));
+        }
+        Some(InodeState { next, packages })
+    }
+}
+
 fn local_path(base: &Path, name: &str, rel: &str) -> PathBuf {
     let mut p = base.join(name);
     for part in rel.split('/') {
@@ -497,6 +651,17 @@ impl SubDb {
         self.len() == 0
     }
 
+    /// Pins of `channel` as (prefix, version).
+    pub fn pins(&self, channel: &str) -> Vec<(String, String)> {
+        self.store
+            .read()
+            .unwrap()
+            .pins()
+            .filter(|(c, _, _)| *c == channel)
+            .map(|(_, p, v)| (p.to_string(), v.to_string()))
+            .collect()
+    }
+
     /// All package names in natural order.
     pub fn list(&self) -> Vec<String> {
         let mut v: Vec<String> = self
@@ -508,5 +673,28 @@ impl SubDb {
             .collect();
         crate::collate::natural_sort(&mut v);
         v
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::osarch::{Arch, Os};
+
+    #[test]
+    fn inode_state_roundtrip() {
+        let st = InodeState {
+            next: 4242,
+            packages: vec![
+                (1000, ArchOs::new(Os::Linux, Arch::Amd64), [0xab; 32]),
+                (1011, ArchOs::new(Os::Linux, Arch::Arm64), [0x01; 32]),
+            ],
+        };
+        assert_eq!(InodeState::decode(&st.encode()), Some(st));
+        assert_eq!(InodeState::decode("garbage"), None);
+        assert_eq!(
+            InodeState::decode("apkg-inodes 1 5\n1000 linux.amd64 abcd\n"),
+            None
+        );
     }
 }

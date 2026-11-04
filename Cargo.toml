@@ -9,7 +9,7 @@ license = "MIT"
 readme = "README.md"
 keywords = ["azusa", "package", "squashfs", "fuse"]
 categories = ["filesystem", "command-line-utilities"]
-exclude = [".github"]
+exclude = [".github", "date_tag.txt"]
 
 [lib]
 name = "apkg"

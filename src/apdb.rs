@@ -16,7 +16,9 @@
 //! | 156 | name index (offset, length, sha256) — reserved |
 //! | 196 | signature of bytes 0..196 |
 //!
-//! The data area is a sequence of [`PackageRecord`]s.
+//! The data area is a sequence of [`PackageRecord`]s (type byte `0x00`),
+//! followed by zero or more [`Pin`]s (type byte `0x01`): release-channel
+//! version pins, `(channel, package prefix) → version`.
 
 use crate::error::{Error, Result};
 use crate::sig::{self, Cursor, SIGNATURE_SIZE};
@@ -92,6 +94,35 @@ fn utf8(b: &[u8], what: &str) -> Result<String> {
     String::from_utf8(b.to_vec()).map_err(|_| Error::Format(format!("non utf-8 package {what}")))
 }
 
+/// A release-channel version pin: on `channel`, looking up `prefix`
+/// resolves to the latest `prefix.version.*` package instead of the latest
+/// `prefix.*`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Pin {
+    pub channel: String,
+    pub prefix: String,
+    pub version: String,
+}
+
+impl Pin {
+    /// Decode a pin record (after its `0x01` type byte).
+    pub fn read(c: &mut Cursor<'_>) -> Result<Pin> {
+        Ok(Pin {
+            channel: utf8(c.varblob(256)?, "pin channel")?,
+            prefix: utf8(c.varblob(256)?, "pin prefix")?,
+            version: utf8(c.varblob(256)?, "pin version")?,
+        })
+    }
+
+    /// Encode this pin, type byte included.
+    pub fn write(&self, out: &mut Vec<u8>) {
+        out.push(1);
+        sig::put_varblob(out, self.channel.as_bytes());
+        sig::put_varblob(out, self.prefix.as_bytes());
+        sig::put_varblob(out, self.version.as_bytes());
+    }
+}
+
 /// A parsed and verified database file.
 #[derive(Debug)]
 pub struct Database {
@@ -105,6 +136,8 @@ pub struct Database {
     /// Owner of the key that signed this database.
     pub signer: &'static str,
     pub packages: Vec<PackageRecord>,
+    /// Release-channel pins carried by this database.
+    pub pins: Vec<Pin>,
 }
 
 /// Parse an APDB file, checking the data hash and the header signature
@@ -144,6 +177,17 @@ pub fn parse(data: &[u8]) -> Result<Database> {
     for _ in 0..count {
         packages.push(PackageRecord::read(&mut c)?);
     }
+    let mut pins = Vec::new();
+    while c.remaining() > 0 {
+        match c.u8()? {
+            1 => pins.push(Pin::read(&mut c)?),
+            t => {
+                return Err(Error::Format(format!(
+                    "invalid data in db (unexpected type {t} after packages)"
+                )));
+            }
+        }
+    }
     Ok(Database {
         flags,
         created,
@@ -153,5 +197,6 @@ pub fn parse(data: &[u8]) -> Result<Database> {
         name,
         signer,
         packages,
+        pins,
     })
 }

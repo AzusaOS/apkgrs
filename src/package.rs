@@ -206,6 +206,7 @@ pub struct Package {
     header: Vec<u8>,
     sig: Vec<u8>,
     meta: Vec<u8>,
+    archos: crate::osarch::ArchOs,
     start_ino: AtomicU64,
     state: Mutex<State>,
 }
@@ -239,8 +240,10 @@ impl Package {
         header: Vec<u8>,
         sig: Vec<u8>,
         meta: Vec<u8>,
+        archos: crate::osarch::ArchOs,
     ) -> Package {
         Package {
+            archos,
             name,
             hash,
             size,
@@ -259,6 +262,11 @@ impl Package {
     /// Full package name, e.g. `sys-libs.zlib.libs.1.3.1.linux.amd64`.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Platform database this package belongs to.
+    pub fn archos(&self) -> crate::osarch::ArchOs {
+        self.archos
     }
 
     /// Package id: sha256 of its signed header.
@@ -475,6 +483,31 @@ impl Opened {
     }
 
     fn path_of(&self, ino: u32) -> Result<String> {
+        if let Some(p) = self.nodes.lock().unwrap().paths.get(&ino) {
+            return Ok(p.clone());
+        }
+        self.discover(ino)
+    }
+
+    /// Find the path of a node never seen through lookup/readdir (e.g. one
+    /// the kernel learned from a previous process) by walking the tree.
+    /// Every directory listed on the way is cached.
+    fn discover(&self, ino: u32) -> Result<String> {
+        let mut queue = std::collections::VecDeque::from([1u32]);
+        while let Some(dir) = queue.pop_front() {
+            for e in self.node_readdir(dir)?.iter() {
+                if e.ino == ino {
+                    return self.path_of_known(ino);
+                }
+                if e.kind == FileKind::Dir {
+                    queue.push_back(e.ino);
+                }
+            }
+        }
+        Err(Error::NotFound)
+    }
+
+    fn path_of_known(&self, ino: u32) -> Result<String> {
         self.nodes
             .lock()
             .unwrap()

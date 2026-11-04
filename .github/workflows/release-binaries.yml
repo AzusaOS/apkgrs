@@ -39,6 +39,9 @@ jobs:
             exit 1
           fi
 
+      - name: Record the build date tag
+        run: TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d%H%M%S HEAD > date_tag.txt
+
       - name: Build static libc-free binary (fullrust)
         uses: KarpelesLab/fullrust@master
         with:
@@ -89,6 +92,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+
+      - name: Record the build date tag
+        run: TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d%H%M%S HEAD > date_tag.txt
 
       - name: Build
         env:

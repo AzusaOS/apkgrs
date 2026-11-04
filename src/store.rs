@@ -7,6 +7,7 @@
 //! "APKGRSDB" | u32 format (1) | varblob version
 //! u32 record count | records (APDB record encoding)
 //! u32 ldso count   | ldso entries (i32 flags, u32 os_version, u64 hwcap, varblob key, varblob value)
+//! u32 pin count    | pins (APDB pin encoding)                         [format 2+]
 //! sha256 of everything above
 //! ```
 //!
@@ -19,7 +20,7 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use crate::apdb::PackageRecord;
+use crate::apdb::{PackageRecord, Pin};
 use crate::collate::collated_version;
 use crate::error::{Error, Result};
 use crate::json::Value;
@@ -27,7 +28,7 @@ use crate::ldcache;
 use crate::sig::{self, Cursor};
 
 const MAGIC: &[u8; 8] = b"APKGRSDB";
-const FORMAT: u32 = 1;
+const FORMAT: u32 = 2;
 
 /// In-memory view of a stored package (metadata stays on disk).
 #[derive(Debug, Clone)]
@@ -56,6 +57,19 @@ pub struct Store {
     by_hash: HashMap<[u8; 32], usize>,
     /// target path → ld.so.cache entry
     ldso: BTreeMap<String, ldcache::Entry>,
+    /// (channel, prefix) → version
+    pins: BTreeMap<(String, String), String>,
+}
+
+/// How a database update affects the stored pins.
+#[derive(Debug, Clone)]
+pub enum PinUpdate {
+    /// Leave pins untouched.
+    Keep,
+    /// Add or overwrite these pins (delta updates).
+    Merge(Vec<Pin>),
+    /// The given set becomes the complete pin list (full database).
+    Replace(Vec<Pin>),
 }
 
 fn rd_ldso(c: &mut Cursor<'_>) -> Result<ldcache::Entry> {
@@ -106,7 +120,8 @@ impl Store {
             return Err(Error::Integrity("index checksum mismatch".into()));
         }
         let mut c = Cursor::new(&body[8..]);
-        if c.u32_be()? != FORMAT {
+        let format = c.u32_be()?;
+        if !(1..=FORMAT).contains(&format) {
             return Err(Error::Format("unsupported index format".into()));
         }
         let version = String::from_utf8_lossy(c.varblob(64)?).into_owned();
@@ -136,6 +151,16 @@ impl Store {
         for _ in 0..n {
             let e = rd_ldso(&mut c)?;
             st.ldso.insert(e.value.clone(), e);
+        }
+        if format >= 2 {
+            let n = c.u32_be()?;
+            for _ in 0..n {
+                if c.u8()? != 1 {
+                    return Err(Error::Format("bad pin record".into()));
+                }
+                let p = Pin::read(&mut c)?;
+                st.pins.insert((p.channel, p.prefix), p.version);
+            }
         }
         Ok(st)
     }
@@ -200,11 +225,30 @@ impl Store {
         self.ldso.values()
     }
 
+    /// Pinned version of `prefix` on `channel`, if any.
+    pub fn pin(&self, channel: &str, prefix: &str) -> Option<&str> {
+        self.pins
+            .get(&(channel.to_string(), prefix.to_string()))
+            .map(String::as_str)
+    }
+
+    /// All pins as (channel, prefix, version).
+    pub fn pins(&self) -> impl Iterator<Item = (&str, &str, &str)> {
+        self.pins
+            .iter()
+            .map(|((c, p), v)| (c.as_str(), p.as_str(), v.as_str()))
+    }
+
     /// Merge `records` into this store under `version`, then rewrite the
     /// file. Packages already known (same header hash) are skipped; a new
     /// package with an existing name replaces the old name mapping.
     /// Returns the number of new packages.
-    pub fn merge_and_save(&mut self, version: &str, records: Vec<PackageRecord>) -> Result<usize> {
+    pub fn merge_and_save(
+        &mut self,
+        version: &str,
+        records: Vec<PackageRecord>,
+        pins: PinUpdate,
+    ) -> Result<usize> {
         // Load every existing metadata blob before the file is replaced.
         let mut f = File::open(&self.file).ok();
         let mut all: Vec<PackageRecord> = Vec::with_capacity(self.by_name.len() + records.len());
@@ -271,6 +315,22 @@ impl Store {
             }
         }
 
+        let mut pin_map = self.pins.clone();
+        match pins {
+            PinUpdate::Keep => {}
+            PinUpdate::Merge(list) => {
+                for p in list {
+                    pin_map.insert((p.channel, p.prefix), p.version);
+                }
+            }
+            PinUpdate::Replace(list) => {
+                pin_map = list
+                    .into_iter()
+                    .map(|p| ((p.channel, p.prefix), p.version))
+                    .collect();
+            }
+        }
+
         // serialize
         let mut out = Vec::with_capacity(1 << 20);
         out.extend_from_slice(MAGIC);
@@ -287,6 +347,15 @@ impl Store {
             out.extend_from_slice(&e.hwcap.to_be_bytes());
             sig::put_varblob(&mut out, e.key.as_bytes());
             sig::put_varblob(&mut out, e.value.as_bytes());
+        }
+        out.extend_from_slice(&(pin_map.len() as u32).to_be_bytes());
+        for ((channel, prefix), version) in pin_map {
+            Pin {
+                channel,
+                prefix,
+                version,
+            }
+            .write(&mut out);
         }
         let sum = sig::sha256(&out);
         out.extend_from_slice(&sum);
@@ -331,6 +400,14 @@ mod tests {
         }
     }
 
+    fn pin(c: &str, p: &str, v: &str) -> Pin {
+        Pin {
+            channel: c.into(),
+            prefix: p.into(),
+            version: v.into(),
+        }
+    }
+
     #[test]
     fn merge_load_lookup() {
         let dir = std::env::temp_dir().join(format!("apkg-store-test-{}", std::process::id()));
@@ -345,13 +422,21 @@ mod tests {
                     rec("a.b.core.1.9.linux.amd64", 1),
                     rec("a.b.core.1.10.linux.amd64", 2),
                 ],
+                PinUpdate::Replace(vec![
+                    pin("stable", "a.b.core", "1.9"),
+                    pin("testing", "a.b.core", "2"),
+                ]),
             )
             .unwrap();
         assert_eq!(n, 2);
         // duplicate hash skipped
         assert_eq!(
-            s.merge_and_save("20200102000000", vec![rec("a.b.core.1.9.linux.amd64", 1)])
-                .unwrap(),
+            s.merge_and_save(
+                "20200102000000",
+                vec![rec("a.b.core.1.9.linux.amd64", 1)],
+                PinUpdate::Merge(vec![pin("testing", "a.b.core", "1.10")]),
+            )
+            .unwrap(),
             0
         );
         let s = Store::load(file);
@@ -369,6 +454,20 @@ mod tests {
             b"{\"full_name\":\"a.b.core.1.10.linux.amd64\"}"
         );
         assert!(s.get("a.b.core.1.9.linux.amd64").is_some());
+        assert_eq!(s.pin("stable", "a.b.core"), Some("1.9"));
+        // pinned resolution: the latest a.b.core.1.9.* package
+        let pinned = format!("a.b.core.{}", s.pin("stable", "a.b.core").unwrap());
+        assert_eq!(
+            s.latest_with_prefix(&pinned).unwrap().name,
+            "a.b.core.1.9.linux.amd64"
+        );
+        assert_eq!(s.pin("testing", "a.b.core"), Some("1.10"));
+        assert_eq!(s.pin("latest", "a.b.core"), None);
+        // a full database replaces the pin set
+        let mut s = s;
+        s.merge_and_save("20200103000000", vec![], PinUpdate::Replace(vec![]))
+            .unwrap();
+        assert_eq!(s.pins().count(), 0);
         let _ = fs::remove_dir_all(&dir);
     }
 }

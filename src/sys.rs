@@ -193,6 +193,14 @@ pub fn set_nofile_limit(n: u64) -> io::Result<u64> {
     }
 }
 
+/// Set FD_CLOEXEC on `fd`.
+pub fn set_cloexec(fd: i32) -> io::Result<()> {
+    const F_SETFD: usize = 2;
+    const FD_CLOEXEC: usize = 1;
+    unsafe { syscall(arch::FCNTL, [fd as usize, F_SETFD, FD_CLOEXEC, 0, 0, 0]) }?;
+    Ok(())
+}
+
 /// Clear FD_CLOEXEC so `fd` survives exec.
 pub fn clear_cloexec(fd: i32) -> io::Result<()> {
     const F_SETFD: usize = 2;
@@ -202,6 +210,7 @@ pub fn clear_cloexec(fd: i32) -> io::Result<()> {
 
 pub const SIGHUP: u32 = 1;
 pub const SIGINT: u32 = 2;
+pub const SIGUSR2: u32 = 12;
 pub const SIGTERM: u32 = 15;
 
 /// Block `signals` for the calling thread (threads spawned afterwards

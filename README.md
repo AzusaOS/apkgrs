@@ -44,7 +44,9 @@ Options:
 | `-base <dir>` | `/pkg`, `~/pkg` | mount base |
 | `-prefix <url>` | `https://data.apkg.net/` | repository |
 | `-threads <n>` | `8` | FUSE worker threads |
+| `-channel <name>` | `stable` | release channel for version pins (`latest` ignores pins) |
 | `-no_ctrl` | | don't open the control socket |
+| `-no_self_update` | | don't install newer daemon builds from `azusa.apkg.core` |
 
 Non-root mounts need `fusermount3` (or `fusermount`). As root, if
 `<base>/.<db>-rw` exists, the package tree is mounted read-only on
@@ -52,7 +54,11 @@ Non-root mounts need `fusermount3` (or `fusermount`). As root, if
 `<base>/<db>`.
 
 `SIGHUP` triggers a database update. Updates also run every hour. `SIGINT`
-and `SIGTERM` unmount and exit. The control socket listens on TCP and UDP port
+and `SIGTERM` unmount and exit. `SIGUSR2` restarts the daemon in place: the
+new process inherits the open FUSE connection and the inode numbering, so the
+mount, open files and working directories under it survive. The self-updater
+uses this after installing a newer build. It checks `azusa.apkg.core` hourly,
+and only installs binaries built from this project with a newer build date. The control socket listens on TCP and UDP port
 100 (10000 for users). `GET /apkgdb/main` returns the status, `?action=list`
 lists packages, and `?sub=linux.arm64` selects another platform. A UDP
 `DISCOVER` datagram is answered with `tcp/<port>`.
@@ -67,6 +73,15 @@ lists packages, and `?sub=linux.arm64` selects another platform. A UDP
 * A `.os.arch` suffix (`….linux.arm64`) reaches another platform's database.
   That database is downloaded on first use.
 * `/pkg/main/ld.so.cache` is the merged loader cache of every library package.
+
+### Release channels
+
+The database can carry version pins per release channel: on `stable`, the
+pin `dev-lang.python.core → 3.12` makes `dev-lang.python.core` resolve to the
+latest `3.12.*` package instead of the latest overall. Exact and longer names
+are unaffected. A channel without pins, or `latest`, always resolves to the
+newest version. If a pinned version is missing, the latest is used and a
+warning is logged.
 
 ## Using the library
 
@@ -130,9 +145,13 @@ Minimum Rust version: 1.95 (edition 2024).
 * Package blocks are verified against the hash table (a TODO in the Go code).
 * `ld.so.cache` keeps one entry per (soname, flags) pair, so 32-bit and 64-bit
   libraries with the same soname coexist. The Go version kept one per soname.
-* Not ported yet: `-load_unsigned` (loading unsigned local squashfs images),
-  the in-place self-updater, and the `apkg-index`/`apkg-convert` repository
-  tools.
+* Graceful restart hands over the inode numbering too, so the kernel's
+  existing references stay valid. The Go version waited for a second FUSE
+  INIT that never comes, and renumbered inodes.
+* The self-updater only installs builds of this daemon. It recognizes them
+  by a marker string, so it never switches back to the Go binary.
+* Not ported yet: `-load_unsigned` (loading unsigned local squashfs images)
+  and the `apkg-index`/`apkg-convert` repository tools.
 
 ## License
 
