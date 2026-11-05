@@ -59,7 +59,7 @@ jobs:
       - run: cargo clippy --target aarch64-unknown-linux-gnu --features bin,tools -- -D warnings
 
   fullrust:
-    name: Static libc-free build (fullrust)
+    name: Static libc-free build (fullrust) + VM tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -76,6 +76,27 @@ jobs:
             echo "::error::binary has dynamic dependencies"; exit 1
           fi
           "$f" -version
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Install QEMU
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-system-x86
+      - name: Integration tests in a VM (FUSE mount, restart, eviction)
+        env:
+          # the fullrust build leaves a root-owned target/
+          CARGO_TARGET_DIR: ${{ runner.temp }}/target
+          VMTEST_DIR: ${{ runner.temp }}/vmtest
+          VMTEST_WATCHDOG: "600"
+        run: tests/vm/run.sh "$PWD/target/x86_64-unknown-linux-fullrust/release/apkg"
+      - name: Keep the VM console log
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: vmtest-console
+          path: ${{ runner.temp }}/vmtest/console.log
 
   docs:
     name: Docs

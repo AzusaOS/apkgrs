@@ -183,6 +183,34 @@ $ docker run --rm -v "$PWD":/src ghcr.io/karpeleslab/fullrust:latest \
 
 Minimum Rust version: 1.95 (edition 2024).
 
+## Testing
+
+`cargo test --features bin,tools` runs the unit tests. The daemon itself is
+tested in a VM, since mounting FUSE needs a kernel of its own (containers
+usually can't):
+
+```console
+$ tests/vm/run.sh [path/to/apkg]
+```
+
+It boots the AzusaOS kernel in QEMU (KVM when `/dev/kvm` is usable) with an
+initramfs built by `examples/vm_image.rs` from repository packages (kernel,
+virtio-net modules, busybox) and the static apkg binary, built with the
+fullrust image if no path is given. `tests/vm/tests.sh` then checks, against
+the live repository:
+
+* root mount: lookups, symlinks, read-only, `ld.so.cache`, file contents
+  (compared with hashes taken through the library), parallel cold reads,
+  running python from the mount;
+* graceful restart (`SIGUSR2`): same mount, open fds and cwd keep working;
+* cache eviction (`-cache_days` + `SIGHUP`): idle packages deleted, recently
+  used kept, evicted packages re-fetched, even through an fd opened before;
+* an unprivileged daemon mounting through `fusermount3`;
+* unmount on `SIGTERM`.
+
+`QEMU`, `VMTEST_DIR` (default `target/vmtest`, the package cache is kept
+there) and `VMTEST_TIMEOUT` can be set. CI runs it after the fullrust build.
+
 ## Differences from the Go version
 
 * The local index is a single signed-checksum file (`<db>.<os>.<arch>.apkgdb`),

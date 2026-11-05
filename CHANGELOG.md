@@ -10,7 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Cache eviction: `Db::clean_cache(max_age)` deletes cached package files
-  unused for `max_age`; the daemon runs it hourly with `-cache_days <n>`.
+  unused for `max_age`; the daemon runs it hourly and on `SIGHUP` with
+  `-cache_days <n>` (fractions allowed).
+- VM integration tests (`tests/vm/run.sh`): an AzusaOS kernel in QEMU runs
+  the static daemon against the live repository, in CI too.
 
 ## [0.0.1](https://github.com/AzusaOS/apkgrs/compare/v0.0.0...v0.0.1) - 2026-11-04
 

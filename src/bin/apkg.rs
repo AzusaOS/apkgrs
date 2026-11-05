@@ -35,8 +35,8 @@ struct Opts {
     ctrl: bool,
     channel: String,
     self_update: bool,
-    /// Evict cached packages unused for this many days (0: never).
-    cache_days: u64,
+    /// Evict cached packages unused this long (zero: never).
+    cache_age: Duration,
 }
 
 fn usage() -> ! {
@@ -55,7 +55,8 @@ fn usage() -> ! {
                              \"latest\" ignores pins)\n  \
            -no_ctrl          do not open the control socket\n  \
            -no_self_update   do not install newer apkg builds from azusa.apkg.core\n  \
-           -cache_days <n>   hourly, delete cached packages unused for n days (default: 0, keep)\n  \
+           -cache_days <n>   hourly (and on SIGHUP), delete cached packages unused for\n  \
+                             n days, fractions allowed (default: 0, keep everything)\n  \
            -version          print version and exit",
         apkg::db::DEFAULT_PREFIX
     );
@@ -72,7 +73,7 @@ fn parse_args() -> Opts {
         ctrl: true,
         channel: apkg::db::DEFAULT_CHANNEL.into(),
         self_update: true,
-        cache_days: 0,
+        cache_age: Duration::ZERO,
     };
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -96,7 +97,13 @@ fn parse_args() -> Opts {
             "no_ctrl" => o.ctrl = false,
             "channel" => o.channel = val(),
             "no_self_update" => o.self_update = false,
-            "cache_days" => o.cache_days = val().parse().unwrap_or_else(|_| usage()),
+            "cache_days" => {
+                o.cache_age = val()
+                    .parse::<f64>()
+                    .ok()
+                    .and_then(|d| Duration::try_from_secs_f64(d * 86400.0).ok())
+                    .unwrap_or_else(|| usage())
+            }
             "load_unsigned" => {
                 log!("apkg: -load_unsigned is not supported by this version, ignored")
             }
@@ -291,28 +298,13 @@ fn main() {
     // periodic updates
     {
         let db = db.clone();
-        let cache_age = Duration::from_secs(opts.cache_days.saturating_mul(86400));
+        let cache_age = opts.cache_age;
         std::thread::Builder::new()
             .name("updater".into())
             .spawn(move || {
                 loop {
                     std::thread::sleep(UPDATE_INTERVAL);
-                    if let Err(e) = db.update() {
-                        log!("apkgdb: update failed: {e}");
-                    }
-                    if !cache_age.is_zero() {
-                        match db.clean_cache(cache_age) {
-                            Ok(c) if c.removed > 0 => log!(
-                                "apkgdb: cache cleanup: removed {} packages ({} MiB), kept {} ({} MiB)",
-                                c.removed,
-                                c.freed >> 20,
-                                c.kept,
-                                c.kept_bytes >> 20
-                            ),
-                            Ok(_) => {}
-                            Err(e) => log!("apkgdb: cache cleanup failed: {e}"),
-                        }
-                    }
+                    maintenance(&db, cache_age);
                 }
             })
             .expect("spawn updater");
@@ -347,11 +339,8 @@ fn main() {
             match sys::read_signal(f) {
                 Ok(sys::SIGHUP) => {
                     let db = db.clone();
-                    std::thread::spawn(move || {
-                        if let Err(e) = db.update() {
-                            log!("apkgdb: update failed: {e}");
-                        }
-                    });
+                    let cache_age = opts.cache_age;
+                    std::thread::spawn(move || maintenance(&db, cache_age));
                 }
                 Ok(sys::SIGUSR2) => match &exe {
                     Some(exe) => {
@@ -409,6 +398,26 @@ fn self_updater(core: &Path, exe: &Path, server: &Server, state_file: &Path) {
             Err(e) => log!("apkg: update failed: {e}"),
         }
         std::thread::sleep(UPDATE_INTERVAL);
+    }
+}
+
+/// Database update, then cache cleanup if enabled.
+fn maintenance(db: &Db, cache_age: Duration) {
+    if let Err(e) = db.update() {
+        log!("apkgdb: update failed: {e}");
+    }
+    if cache_age.is_zero() {
+        return;
+    }
+    match db.clean_cache(cache_age) {
+        Ok(c) => log!(
+            "apkgdb: cache cleanup: removed {} packages ({} KiB), kept {} ({} KiB)",
+            c.removed,
+            c.freed >> 10,
+            c.kept,
+            c.kept_bytes >> 10
+        ),
+        Err(e) => log!("apkgdb: cache cleanup failed: {e}"),
     }
 }
 
