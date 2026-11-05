@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.2](https://github.com/AzusaOS/apkgrs/compare/v0.0.1...v0.0.2) - 2026-11-05
+
+### Other
+
+- never lose a request across graceful restart
+- VM integration tests: AzusaOS kernel in QEMU against the live repository
+- cache eviction under Unreleased
+- Add Db::clean_cache and -cache_days to evict unused cached packages
+
 ### Fixed
 
 - Graceful restart could lose a FUSE request read just before the
