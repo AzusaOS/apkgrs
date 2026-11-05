@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Graceful restart could lose a FUSE request read just before the
+  handover, hanging the caller forever; workers now read under the gate.
+  The inode state is also saved after in-flight requests are drained.
+
 ### Added
 
 - Cache eviction: `Db::clean_cache(max_age)` deletes cached package files

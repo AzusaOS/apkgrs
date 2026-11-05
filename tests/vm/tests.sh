@@ -62,9 +62,28 @@ echo "step: open $F0"
 exec 3< "$F0"
 cd "$M/$PKG1/bin"
 PID=$(apkg_pid 0)
-echo "step: SIGUSR2 to $PID"
-kill -USR2 "$PID"
-check "restart: new process took over" wait_for 60 log_has "took over FUSE connection"
+# concurrent traffic (opens, reads, closes => FLUSH/RELEASE) during restarts
+rm -f /tmp/load.stop /tmp/load.err
+LOADPIDS=
+for i in 1 2 3; do
+    ( while [ ! -e /tmp/load.stop ]; do
+        drop_caches
+        shuf /test/expected.sha256 | sha256sum -c -s || echo "reader $i failed" >> /tmp/load.err
+      done ) &
+    LOADPIDS="$LOADPIDS $!"
+done
+sleep 2
+for r in 1 2 3; do
+    echo "step: SIGUSR2 #$r to $PID"
+    kill -USR2 "$PID"
+    wait_for 60 sh -c "[ \$(grep -c 'took over FUSE connection' $LOG) -ge $r ]" || break
+    sleep 2
+done
+check "restart: 3 restarts under load, new process took over" sh -c "[ \$(grep -c 'took over FUSE connection' $LOG) -eq 3 ]"
+touch /tmp/load.stop
+loads_done() { for p in $LOADPIDS; do [ -d /proc/$p ] && [ "$(cut -d' ' -f3 /proc/$p/stat)" != Z ] && return 1; done; return 0; }
+check "restart: concurrent readers finished (no lost request)" wait_for 120 loads_done
+check "restart: concurrent readers saw correct data" sh -c "[ ! -s /tmp/load.err ] || { cat /tmp/load.err; false; }"
 check "restart: same pid, still mounted" sh -c "[ '$(apkg_pid 0)' = $PID ] && grep -q ' $M fuse' /proc/mounts"
 drop_caches
 check "restart: fd opened before still reads" sh -c "[ \"\$(sha256sum <&3 | cut -d' ' -f1)\" = $(expected "$F0") ]"

@@ -253,9 +253,14 @@ pub struct Server {
     mount: Arc<Mount>,
     minor: AtomicU32,
     initialized: AtomicBool,
-    /// Held (shared) while a request read from the kernel is being
-    /// answered; taken exclusively before handing the connection over.
+    /// Held (shared) by a worker from before it reads a request until the
+    /// request is answered; taken exclusively before handing the
+    /// connection over, so no request can be lost in between.
     gate: RwLock<()>,
+    /// Set while handing over: workers stop reading requests.
+    stopping: AtomicBool,
+    /// Signalled to wake the workers waiting in `poll`.
+    wake: File,
 }
 
 /// Environment variables carrying a live mount to a new process. The fd
@@ -303,12 +308,18 @@ impl Handoff {
 impl Server {
     /// Prepare a server; call [`Server::run`] to process requests.
     pub fn new(db: Db, mount: Mount) -> Arc<Server> {
+        // Workers read with O_NONBLOCK under the gate (see `worker`).
+        if let Err(e) = sys::set_nonblocking(mount.dev.as_raw_fd(), true) {
+            crate::log!("apkgfs: cannot make /dev/fuse non-blocking: {e}");
+        }
         let s = Arc::new(Server {
             db,
             mount: Arc::new(mount),
             minor: AtomicU32::new(0),
             initialized: AtomicBool::new(false),
             gate: RwLock::new(()),
+            stopping: AtomicBool::new(false),
+            wake: sys::eventfd().expect("eventfd"),
         });
         // push ld.so.cache changes into the kernel page cache
         let weak = Arc::downgrade(&s);
@@ -335,13 +346,28 @@ impl Server {
     /// environment (see [`Handoff::from_env`]). Returns only on failure.
     pub fn graceful_exec(&self, exe: &Path, state_file: &Path) -> io::Error {
         use std::os::unix::process::CommandExt;
+        let fd = self.mount.dev.as_raw_fd();
+        // Stop reading requests and wait for every request being answered.
+        // Workers hold the gate across read *and* reply, so once we own it
+        // no request is sitting unanswered in this process.
+        self.stopping.store(true, Ordering::SeqCst);
+        let _ = (&self.wake).write(&1u64.to_ne_bytes());
+        let _gate = self.gate.write().unwrap();
+        let resume = || {
+            let _ = sys::set_cloexec(fd);
+            let _ = sys::set_nonblocking(fd, true);
+            let mut b = [0u8; 8];
+            let _ = (&self.wake).read(&mut b);
+            self.stopping.store(false, Ordering::SeqCst);
+        };
+        // the inode allocation is final now: no request can create packages
         if let Err(e) = std::fs::write(state_file, self.db.inode_state().encode()) {
+            resume();
             return e;
         }
-        let fd = self.mount.dev.as_raw_fd();
-        // stop answering: wait for every request being processed
-        let _gate = self.gate.write().unwrap();
-        if let Err(e) = sys::clear_cloexec(fd) {
+        // the next process may be the Go daemon, which reads blocking
+        if let Err(e) = sys::set_nonblocking(fd, false).and_then(|_| sys::clear_cloexec(fd)) {
+            resume();
             return e;
         }
         crate::log!(
@@ -356,7 +382,8 @@ impl Server {
             .env(ENV_STATE, state_file)
             .env(ENV_MINOR, self.minor.load(Ordering::Acquire).to_string())
             .exec();
-        let _ = sys::set_cloexec(fd);
+        let _ = std::fs::remove_file(state_file);
+        resume();
         err
     }
 
@@ -391,10 +418,45 @@ impl Server {
 
     fn worker(&self) {
         let mut buf = vec![0u8; BUF_SIZE];
+        let dev = self.mount.dev.as_raw_fd();
         loop {
+            let mut fds = [
+                sys::PollFd {
+                    fd: dev,
+                    events: sys::POLLIN,
+                    revents: 0,
+                },
+                sys::PollFd {
+                    fd: self.wake.as_raw_fd(),
+                    events: sys::POLLIN,
+                    revents: 0,
+                },
+            ];
+            if let Err(e) = sys::poll(&mut fds) {
+                if e.raw_os_error() == Some(EINTR) {
+                    continue;
+                }
+                crate::log!("apkgfs: poll on /dev/fuse failed: {e}");
+                return;
+            }
+            // A handover is starting: wait on the gate until it is over
+            // (exec, or resumed after a failed exec).
+            if self.stopping.load(Ordering::SeqCst) {
+                drop(self.gate.read().unwrap());
+                if self.stopping.load(Ordering::SeqCst) {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                continue;
+            }
+            // The gate is held from the read until the reply is sent.
+            let _gate = self.gate.read().unwrap();
+            if self.stopping.load(Ordering::SeqCst) {
+                continue;
+            }
             let n = match (&*self.mount.dev).read(&mut buf) {
                 Ok(n) => n,
                 Err(e) => match e.raw_os_error() {
+                    // EAGAIN: another worker took the request
                     Some(ENOENT) | Some(EINTR) | Some(EAGAIN) => continue,
                     Some(ENODEV) => return,
                     _ => {
@@ -403,7 +465,6 @@ impl Server {
                     }
                 },
             };
-            let _gate = self.gate.read().unwrap();
             let req = &buf[..n];
             let Some(h) = InHeader::parse(req) else {
                 continue;

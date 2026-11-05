@@ -24,6 +24,8 @@ mod arch {
     pub const RECVMSG: usize = 47;
     pub const PRLIMIT64: usize = 302;
     pub const IOCTL: usize = 16;
+    pub const PPOLL: usize = 271;
+    pub const EVENTFD2: usize = 290;
 
     #[inline]
     pub unsafe fn syscall6(n: usize, a: [usize; 6]) -> isize {
@@ -58,6 +60,8 @@ mod arch {
     pub const RECVMSG: usize = 212;
     pub const PRLIMIT64: usize = 261;
     pub const IOCTL: usize = 29;
+    pub const PPOLL: usize = 73;
+    pub const EVENTFD2: usize = 19;
 
     #[inline]
     pub unsafe fn syscall6(n: usize, a: [usize; 6]) -> isize {
@@ -91,6 +95,8 @@ mod arch {
     pub const RECVMSG: usize = 0;
     pub const PRLIMIT64: usize = 0;
     pub const IOCTL: usize = 0;
+    pub const PPOLL: usize = 0;
+    pub const EVENTFD2: usize = 0;
 
     pub unsafe fn syscall6(_: usize, _: [usize; 6]) -> isize {
         -38 // ENOSYS
@@ -209,6 +215,54 @@ pub fn clear_cloexec(fd: i32) -> io::Result<()> {
     const F_SETFD: usize = 2;
     unsafe { syscall(arch::FCNTL, [fd as usize, F_SETFD, 0, 0, 0, 0]) }?;
     Ok(())
+}
+
+/// Set or clear O_NONBLOCK on `fd` (on the open file description, so it
+/// is shared with every duplicate and survives exec).
+pub fn set_nonblocking(fd: i32, on: bool) -> io::Result<()> {
+    const F_GETFL: usize = 3;
+    const F_SETFL: usize = 4;
+    const O_NONBLOCK: usize = 0o4000;
+    let fl = unsafe { syscall(arch::FCNTL, [fd as usize, F_GETFL, 0, 0, 0, 0]) }?;
+    let fl = if on {
+        fl | O_NONBLOCK
+    } else {
+        fl & !O_NONBLOCK
+    };
+    unsafe { syscall(arch::FCNTL, [fd as usize, F_SETFL, fl, 0, 0, 0]) }?;
+    Ok(())
+}
+
+/// A non-blocking, close-on-exec eventfd.
+pub fn eventfd() -> io::Result<std::fs::File> {
+    use std::os::fd::FromRawFd;
+    const EFD_CLOEXEC: usize = 0o2000000;
+    const EFD_NONBLOCK: usize = 0o4000;
+    let fd = unsafe { syscall(arch::EVENTFD2, [0, EFD_CLOEXEC | EFD_NONBLOCK, 0, 0, 0, 0]) }?;
+    Ok(unsafe { std::fs::File::from_raw_fd(fd as i32) })
+}
+
+pub const POLLIN: i16 = 0x1;
+pub const POLLERR: i16 = 0x8;
+pub const POLLHUP: i16 = 0x10;
+
+/// `struct pollfd`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PollFd {
+    pub fd: i32,
+    pub events: i16,
+    pub revents: i16,
+}
+
+/// Wait without timeout until one of `fds` is ready; returns how many are.
+pub fn poll(fds: &mut [PollFd]) -> io::Result<usize> {
+    unsafe {
+        syscall(
+            arch::PPOLL,
+            [fds.as_mut_ptr() as usize, fds.len(), 0, 0, 8, 0],
+        )
+    }
 }
 
 pub const SIGHUP: u32 = 1;
