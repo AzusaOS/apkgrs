@@ -1,6 +1,6 @@
 [package]
 name = "apkg"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2024"
 rust-version = "1.95"
 description = "AzusaOS package manager: access signed Azusa packages as a library, or mount them with the FUSE daemon."
